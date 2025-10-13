@@ -1,0 +1,117 @@
+{
+  "name": "dspyground",
+  "version": "0.2.5",
+  "private": false,
+  "description": "DSPyGround - Optimize and test your AI agents with AI SDK",
+  "author": "Karthik Kalyanaraman",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/dspyground.git"
+  },
+  "keywords": [
+    "ai",
+    "ai-sdk",
+    "dspy",
+    "prompt-optimization",
+    "llm",
+    "agent",
+    "testing"
+  ],
+  "bin": {
+    "dspyground": "./dist/cli/index.mjs"
+  },
+  "files": [
+    "dist",
+    "templates",
+    ".next/standalone",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev": "next dev",
+    "dev:cli": "tsx cli/index.ts",
+    "clean": "rm -rf dist .next tsconfig.tsbuildinfo",
+    "build": "npm run clean && npm run build:cli && npm run build:server && npm run prepare:standalone && npm run clean:sensitive",
+    "build:cli": "tsup cli/index.ts cli/init.ts cli/dev.ts --format esm --dts --out-dir dist/cli",
+    "build:server": "next build",
+    "prepare:standalone": "node scripts/prepare-standalone.mjs",
+    "clean:sensitive": "node scripts/clean-sensitive.mjs",
+    "start": "next start",
+    "lint": "eslint",
+    "test:metrics": "npx tsx src/lib/test-metrics.ts",
+    "dev:py": "cd python_optimizer && uv run app.py",
+    "dev:all": "concurrently -k -n web,py -c auto \"npm run dev\" \"cd python_optimizer && uv run app.py\"",
+    "start:all": "concurrently -k -n web,py -c auto \"npm run dev\" \"cd python_optimizer && uv run app.py\"",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@ai-sdk/gateway": "^1.0.25",
+    "@ai-sdk/openai": "^2.0.30",
+    "@ai-sdk/react": "^2.0.44",
+    "@radix-ui/react-alert-dialog": "^1.1.15",
+    "@radix-ui/react-avatar": "^1.1.10",
+    "@radix-ui/react-collapsible": "^1.1.12",
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-dropdown-menu": "^2.1.16",
+    "@radix-ui/react-hover-card": "^1.1.15",
+    "@radix-ui/react-label": "^2.1.7",
+    "@radix-ui/react-select": "^2.2.6",
+    "@radix-ui/react-separator": "^1.1.7",
+    "@radix-ui/react-slot": "^1.2.3",
+    "@radix-ui/react-switch": "^1.2.6",
+    "@radix-ui/react-tabs": "^1.1.13",
+    "@radix-ui/react-tooltip": "^1.2.8",
+    "ai": "^5.0.44",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "commander": "^12.1.0",
+    "convex": "^1.27.1",
+    "dotenv": "^17.2.2",
+    "jiti": "^2.6.1",
+    "lucide-react": "^0.544.0",
+    "nanoid": "^5.1.6",
+    "next": "15.5.3",
+    "next-themes": "^0.4.6",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-syntax-highlighter": "^15.6.6",
+    "recharts": "^2.12.7",
+    "sonner": "1.7.4",
+    "streamdown": "^1.4.0",
+    "tailwind-merge": "^3.3.1",
+    "tsx": "^4.20.5",
+    "use-stick-to-bottom": "^1.1.1",
+    "zod": "^4.1.12"
+  },
+  "peerDependencies": {
+    "ai": "^5.0.0",
+    "zod": "^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "ai": {
+      "optional": true
+    },
+    "zod": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20.19.14",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/react-syntax-highlighter": "^15.5.13",
+    "concurrently": "^8.2.2",
+    "eslint": "^9",
+    "eslint-config-next": "15.5.3",
+    "tailwindcss": "^4",
+    "tsup": "^8.5.0",
+    "tw-animate-css": "^1.3.8",
+    "typescript": "^5.9.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

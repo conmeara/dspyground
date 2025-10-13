@@ -1,0 +1,11 @@
+{
+  "groups": [
+    {
+      "id": "default",
+      "name": "Default",
+      "samples": [],
+      "createdAt": "2025-10-13T06:31:29.126Z"
+    }
+  ],
+  "currentGroupId": "default"
+}
