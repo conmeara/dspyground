@@ -6,6 +6,7 @@ import {
   ConversationEmptyState,
   ConversationScrollButton,
 } from "@/components/ai-elements/conversation";
+import { ImproveChat } from "@/components/ImproveChat";
 import { Message, MessageContent } from "@/components/ai-elements/message";
 import {
   PromptInput,
@@ -87,6 +88,7 @@ const structuredOutputSchema = z.object({
 });
 
 export default function Chat() {
+  const [improveMode, setImproveMode] = useState(true);
   const [useStructuredOutput, setUseStructuredOutput] = useState(false);
   const [selectedModel, setSelectedModelState] = useState<string>("");
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
@@ -656,10 +658,21 @@ export default function Chat() {
                 </Link>
               </Button>
               <div className="flex items-center gap-2 px-3 py-1.5 border rounded-md bg-background">
+                <span className="text-xs text-muted-foreground">Teaching</span>
+                <Switch
+                  checked={improveMode}
+                  onCheckedChange={setImproveMode}
+                />
+                <span className="text-xs text-muted-foreground">
+                  Improve
+                </span>
+              </div>
+              <div className="flex items-center gap-2 px-3 py-1.5 border rounded-md bg-background">
                 <span className="text-xs text-muted-foreground">Text</span>
                 <Switch
                   checked={useStructuredOutput}
                   onCheckedChange={setUseStructuredOutput}
+                  disabled={improveMode}
                 />
                 <span className="text-xs text-muted-foreground">
                   Structured
@@ -752,9 +765,18 @@ export default function Chat() {
 
         {/* Right: Chat Area */}
         <div className="w-1/2 flex flex-col">
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <div className="h-full flex flex-col px-6">
-              {useStructuredOutput ? (
+          {improveMode ? (
+            <ImproveChat
+              selectedModel={selectedModel}
+              onModelChange={setSelectedModel}
+              textModels={textModels}
+              preferencesLoaded={preferencesLoaded}
+            />
+          ) : (
+            <>
+              <div className="flex-1 min-h-0 overflow-hidden">
+                <div className="h-full flex flex-col px-6">
+                  {useStructuredOutput ? (
                 // Structured Output Mode
                 <Conversation className="flex-1 min-h-0">
                   <ConversationContent>
@@ -952,6 +974,8 @@ export default function Chat() {
               </PromptInput>
             </div>
           </div>
+            </>
+          )}
         </div>
       </div>
 

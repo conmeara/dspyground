@@ -22,6 +22,7 @@ interface FeedbackDialogProps {
     comment?: string;
   }) => void;
   isSaving?: boolean;
+  autoMessage?: string;
 }
 
 export function FeedbackDialog({
@@ -29,6 +30,7 @@ export function FeedbackDialog({
   onOpenChange,
   onSave,
   isSaving = false,
+  autoMessage,
 }: FeedbackDialogProps) {
   const [rating, setRating] = useState<"positive" | "negative" | null>(null);
   const [comment, setComment] = useState("");
@@ -81,6 +83,14 @@ export function FeedbackDialog({
         </DialogHeader>
 
         <div className="space-y-4 py-4">
+          {/* Auto message from Improve Mode voting */}
+          {autoMessage && (
+            <div className="px-4 py-3 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900/40 rounded-md">
+              <p className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                {autoMessage}
+              </p>
+            </div>
+          )}
           {/* Rating buttons */}
           <div className="flex items-center justify-center gap-4">
             <Button

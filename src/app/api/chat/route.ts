@@ -27,14 +27,19 @@ export async function POST(req: Request) {
   const config = await loadUserConfig();
 
   // Read system prompt from config or data/prompt.md
+  // Allow override from request body (for Improve mode)
   let systemPrompt: string | undefined;
-  try {
-    const dataDir = getDataDirectory();
-    const promptPath = path.join(dataDir, "prompt.md");
-    const promptContent = await fs.readFile(promptPath, "utf8");
-    systemPrompt = promptContent?.trim() ? promptContent : config.systemPrompt;
-  } catch {
-    systemPrompt = config.systemPrompt;
+  if (body.systemPrompt && typeof body.systemPrompt === "string") {
+    systemPrompt = body.systemPrompt;
+  } else {
+    try {
+      const dataDir = getDataDirectory();
+      const promptPath = path.join(dataDir, "prompt.md");
+      const promptContent = await fs.readFile(promptPath, "utf8");
+      systemPrompt = promptContent?.trim() ? promptContent : config.systemPrompt;
+    } catch {
+      systemPrompt = config.systemPrompt;
+    }
   }
 
   // If structured output is requested, use streamObject
