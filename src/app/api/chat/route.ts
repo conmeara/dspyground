@@ -35,8 +35,14 @@ export async function POST(req: Request) {
     try {
       const dataDir = getDataDirectory();
       const promptPath = path.join(dataDir, "prompt.md");
-      const promptContent = await fs.readFile(promptPath, "utf8");
-      systemPrompt = promptContent?.trim() ? promptContent : config.systemPrompt;
+      let promptContent = await fs.readFile(promptPath, "utf8");
+
+      // Strip markdown code fence syntax if present
+      promptContent = promptContent.replace(/^```(?:markdown|plaintext)?\s*\n?/gm, '');
+      promptContent = promptContent.replace(/\n?```\s*$/gm, '');
+      promptContent = promptContent.trim();
+
+      systemPrompt = promptContent ? promptContent : config.systemPrompt;
     } catch {
       systemPrompt = config.systemPrompt;
     }

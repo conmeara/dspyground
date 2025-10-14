@@ -571,7 +571,14 @@ export default function Chat() {
       const res = await fetch("/api/prompt");
       if (res.ok) {
         const data = await res.json();
-        setPromptEditorContent(data.prompt || "");
+        let prompt = data.prompt || "";
+
+        // Strip markdown code fence syntax if present
+        prompt = prompt.replace(/^```(?:markdown|plaintext)?\s*\n?/gm, '');
+        prompt = prompt.replace(/\n?```\s*$/gm, '');
+        prompt = prompt.trim();
+
+        setPromptEditorContent(prompt);
       }
     } catch (error) {
       console.error("Error loading prompt:", error);
@@ -771,6 +778,11 @@ export default function Chat() {
               onModelChange={setSelectedModel}
               textModels={textModels}
               preferencesLoaded={preferencesLoaded}
+              onPromptUpdate={loadPromptEditorContent}
+              onChatReset={() => {
+                // Optional: Add any additional reset logic here
+                console.log("Chat reset after sample save");
+              }}
             />
           ) : (
             <>

@@ -10,7 +10,12 @@ async function loadPrompt(): Promise<string> {
   const dataDir = getDataDirectory();
   const promptPath = path.join(dataDir, "prompt.md");
   try {
-    const data = await fs.readFile(promptPath, "utf-8");
+    let data = await fs.readFile(promptPath, "utf-8");
+
+    // Strip markdown code fence syntax if present
+    data = data.replace(/^```(?:markdown|plaintext)?\s*\n?/gm, '');
+    data = data.replace(/\n?```\s*$/gm, '');
+
     return data.trim();
   } catch {
     return "You are a helpful assistant.";

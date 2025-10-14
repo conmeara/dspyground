@@ -22,9 +22,8 @@ import {
 import { Response } from "@/components/ai-elements/response";
 import { FeedbackDialog } from "@/components/ui/feedback-dialog";
 import { type VoteChoice, VotingButtons } from "@/components/ui/voting-buttons";
-import { useChat } from "@ai-sdk/react";
 import { MessageSquare } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
 
 interface ImproveChatProps {
@@ -33,17 +32,18 @@ interface ImproveChatProps {
   textModels: Array<{ id: string; name: string }>;
   preferencesLoaded: boolean;
   reflectionModel?: string;
+  onPromptUpdate?: () => void;
+  onChatReset?: () => void;
 }
 
-type ImproveRound = {
-  userMessage: string;
-  variantA: string;
-  variantB: string;
-  responseA: string;
-  responseB: string;
-  streamingA: boolean;
-  streamingB: boolean;
-  votingEnabled: boolean;
+type ConversationMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+type Thread = {
+  systemPrompt: string;
+  messages: ConversationMessage[];
 };
 
 export function ImproveChat({
@@ -52,236 +52,205 @@ export function ImproveChat({
   textModels,
   preferencesLoaded,
   reflectionModel = "openai/gpt-4o",
+  onPromptUpdate,
+  onChatReset,
 }: ImproveChatProps) {
-  const [currentRound, setCurrentRound] = useState<ImproveRound | null>(null);
-  const [history, setHistory] = useState<ImproveRound[]>([]);
+  const [threadA, setThreadA] = useState<Thread | null>(null);
+  const [threadB, setThreadB] = useState<Thread | null>(null);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [isGeneratingVariants, setIsGeneratingVariants] = useState(false);
+  const [votingEnabled, setVotingEnabled] = useState(false);
   const [feedbackDialogOpen, setFeedbackDialogOpen] = useState(false);
   const [pendingVote, setPendingVote] = useState<VoteChoice | null>(null);
   const [savingSample, setSavingSample] = useState(false);
-  const [isGeneratingVariants, setIsGeneratingVariants] = useState(false);
 
   const handleSubmit = useCallback(
     async (message: { text?: string; files?: unknown[] }) => {
       const text = message.text?.trim();
       if (!text) return;
 
+      const isFirstMessage = !threadA || !threadB;
+
       try {
-        setIsGeneratingVariants(true);
+        setIsStreaming(true);
+        setVotingEnabled(false);
 
-        // Generate prompt variants
-        const variantsResponse = await fetch("/api/generate-prompt-variants", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reflectionModel }),
-        });
+        // First message: generate variants and initialize threads
+        if (isFirstMessage) {
+          setIsGeneratingVariants(true);
 
-        if (!variantsResponse.ok) {
-          throw new Error("Failed to generate variants");
+          const variantsResponse = await fetch("/api/generate-prompt-variants", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reflectionModel }),
+          });
+
+          if (!variantsResponse.ok) {
+            throw new Error("Failed to generate variants");
+          }
+
+          const { variantA, variantB } = await variantsResponse.json();
+
+          // Initialize threads with system prompts
+          setThreadA({
+            systemPrompt: variantA,
+            messages: [{ role: "user", content: text }],
+          });
+          setThreadB({
+            systemPrompt: variantB,
+            messages: [{ role: "user", content: text }],
+          });
+
+          setIsGeneratingVariants(false);
+
+          // Stream both responses
+          await Promise.all([
+            streamResponse("A", variantA, [{ role: "user", content: text }]),
+            streamResponse("B", variantB, [{ role: "user", content: text }]),
+          ]);
+        } else {
+          // Subsequent messages: append to existing threads
+          const newUserMessage: ConversationMessage = { role: "user", content: text };
+
+          setThreadA((prev) =>
+            prev ? { ...prev, messages: [...prev.messages, newUserMessage] } : prev
+          );
+          setThreadB((prev) =>
+            prev ? { ...prev, messages: [...prev.messages, newUserMessage] } : prev
+          );
+
+          // Stream both responses with full history
+          await Promise.all([
+            streamResponse("A", threadA!.systemPrompt, [
+              ...threadA!.messages,
+              newUserMessage,
+            ]),
+            streamResponse("B", threadB!.systemPrompt, [
+              ...threadB!.messages,
+              newUserMessage,
+            ]),
+          ]);
         }
 
-        const { variantA, variantB } = await variantsResponse.json();
-
-        // Initialize new round
-        const newRound: ImproveRound = {
-          userMessage: text,
-          variantA,
-          variantB,
-          responseA: "",
-          responseB: "",
-          streamingA: true,
-          streamingB: true,
-          votingEnabled: false,
-        };
-
-        setCurrentRound(newRound);
-        setIsGeneratingVariants(false);
-
-        // Stream response A
-        const streamA = async () => {
-          try {
-            const response = await fetch(
-              `/api/chat?model=${encodeURIComponent(selectedModel)}`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  messages: [
-                    {
-                      id: "user-1",
-                      role: "user",
-                      parts: [{ type: "text", text }],
-                    },
-                  ],
-                  systemPrompt: variantA,
-                }),
-              }
-            );
-
-            if (!response.ok) {
-              throw new Error(`Stream A failed: ${response.status}`);
-            }
-
-            const reader = response.body?.getReader();
-            if (!reader) {
-              throw new Error("No reader available for stream A");
-            }
-
-            const decoder = new TextDecoder();
-            let buffer = "";
-            let accumulatedText = "";
-
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-
-              buffer += decoder.decode(value, { stream: true });
-              const lines = buffer.split("\n");
-
-              // Keep the last incomplete line in the buffer
-              buffer = lines.pop() || "";
-
-              for (const line of lines) {
-                if (!line.trim()) continue;
-
-                // Skip [DONE] marker
-                if (line.includes("[DONE]")) continue;
-
-                // SSE format: "data: {...}"
-                if (line.startsWith("data: ")) {
-                  const jsonStr = line.slice(6); // Remove "data: " prefix
-
-                  try {
-                    const event = JSON.parse(jsonStr);
-
-                    // Accumulate text deltas
-                    if (event.type === "text-delta" && event.delta) {
-                      accumulatedText += event.delta;
-                      setCurrentRound((prev) =>
-                        prev ? { ...prev, responseA: accumulatedText } : prev
-                      );
-                    }
-                  } catch (e) {
-                    // Ignore parse errors for non-JSON lines
-                  }
-                }
-              }
-            }
-          } catch (error) {
-            console.error("[ImproveChat] Stream A error:", error);
-            toast.error("Failed to generate Response A");
-            setCurrentRound((prev) =>
-              prev
-                ? { ...prev, responseA: "Error generating response", streamingA: false }
-                : prev
-            );
-          } finally {
-            setCurrentRound((prev) =>
-              prev ? { ...prev, streamingA: false } : prev
-            );
-          }
-        };
-
-        // Stream response B
-        const streamB = async () => {
-          try {
-            const response = await fetch(
-              `/api/chat?model=${encodeURIComponent(selectedModel)}`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  messages: [
-                    {
-                      id: "user-1",
-                      role: "user",
-                      parts: [{ type: "text", text }],
-                    },
-                  ],
-                  systemPrompt: variantB,
-                }),
-              }
-            );
-
-            if (!response.ok) {
-              throw new Error(`Stream B failed: ${response.status}`);
-            }
-
-            const reader = response.body?.getReader();
-            if (!reader) {
-              throw new Error("No reader available for stream B");
-            }
-
-            const decoder = new TextDecoder();
-            let buffer = "";
-            let accumulatedText = "";
-
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-
-              buffer += decoder.decode(value, { stream: true });
-              const lines = buffer.split("\n");
-
-              // Keep the last incomplete line in the buffer
-              buffer = lines.pop() || "";
-
-              for (const line of lines) {
-                if (!line.trim()) continue;
-
-                // Skip [DONE] marker
-                if (line.includes("[DONE]")) continue;
-
-                // SSE format: "data: {...}"
-                if (line.startsWith("data: ")) {
-                  const jsonStr = line.slice(6); // Remove "data: " prefix
-
-                  try {
-                    const event = JSON.parse(jsonStr);
-
-                    // Accumulate text deltas
-                    if (event.type === "text-delta" && event.delta) {
-                      accumulatedText += event.delta;
-                      setCurrentRound((prev) =>
-                        prev ? { ...prev, responseB: accumulatedText } : prev
-                      );
-                    }
-                  } catch (e) {
-                    // Ignore parse errors for non-JSON lines
-                  }
-                }
-              }
-            }
-          } catch (error) {
-            console.error("[ImproveChat] Stream B error:", error);
-            toast.error("Failed to generate Response B");
-            setCurrentRound((prev) =>
-              prev
-                ? { ...prev, responseB: "Error generating response", streamingB: false }
-                : prev
-            );
-          } finally {
-            setCurrentRound((prev) =>
-              prev ? { ...prev, streamingB: false } : prev
-            );
-          }
-        };
-
-        // Start both streams in parallel
-        await Promise.all([streamA(), streamB()]);
-
-        // Enable voting when both complete
-        setCurrentRound((prev) =>
-          prev ? { ...prev, votingEnabled: true } : prev
-        );
+        // Enable voting after both streams complete
+        setVotingEnabled(true);
       } catch (error) {
-        console.error("Error in improve mode:", error);
+        console.error("[ImproveChat] Error in handleSubmit:", error);
         toast.error("Failed to generate responses");
-        setCurrentRound(null);
         setIsGeneratingVariants(false);
+      } finally {
+        setIsStreaming(false);
       }
     },
-    [selectedModel, reflectionModel]
+    [selectedModel, reflectionModel, threadA, threadB]
   );
+
+  const streamResponse = async (
+    threadId: "A" | "B",
+    systemPrompt: string,
+    messages: ConversationMessage[]
+  ) => {
+    try {
+      const response = await fetch(
+        `/api/chat?model=${encodeURIComponent(selectedModel)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messages: messages.map((msg, idx) => ({
+              id: `${msg.role}-${idx}`,
+              role: msg.role,
+              parts: [{ type: "text", text: msg.content }],
+            })),
+            systemPrompt,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Stream ${threadId} failed: ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error(`No reader available for stream ${threadId}`);
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let accumulatedText = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.trim() || line.includes("[DONE]")) continue;
+
+          if (line.startsWith("data: ")) {
+            const jsonStr = line.slice(6);
+            try {
+              const event = JSON.parse(jsonStr);
+              if (event.type === "text-delta" && event.delta) {
+                accumulatedText += event.delta;
+
+                // Update appropriate thread with streamed content
+                const updateFn = threadId === "A" ? setThreadA : setThreadB;
+                updateFn((prev) => {
+                  if (!prev) return prev;
+                  const lastMessage = prev.messages[prev.messages.length - 1];
+                  const isUpdatingLastAssistant =
+                    lastMessage?.role === "assistant";
+
+                  if (isUpdatingLastAssistant) {
+                    // Update existing assistant message
+                    return {
+                      ...prev,
+                      messages: [
+                        ...prev.messages.slice(0, -1),
+                        { role: "assistant", content: accumulatedText },
+                      ],
+                    };
+                  } else {
+                    // Append new assistant message
+                    return {
+                      ...prev,
+                      messages: [
+                        ...prev.messages,
+                        { role: "assistant", content: accumulatedText },
+                      ],
+                    };
+                  }
+                });
+              }
+            } catch (e) {
+              // Ignore parse errors
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error(`[ImproveChat] Stream ${threadId} error:`, error);
+      toast.error(`Failed to generate Response ${threadId}`);
+
+      const updateFn = threadId === "A" ? setThreadA : setThreadB;
+      updateFn((prev) =>
+        prev
+          ? {
+              ...prev,
+              messages: [
+                ...prev.messages,
+                { role: "assistant", content: "Error generating response" },
+              ],
+            }
+          : prev
+      );
+    }
+  };
 
   const handleVote = useCallback((choice: VoteChoice) => {
     setPendingVote(choice);
@@ -290,7 +259,7 @@ export function ImproveChat({
 
   const handleSaveWithFeedback = useCallback(
     async (feedback: { rating: "positive" | "negative"; comment?: string }) => {
-      if (!currentRound || !pendingVote) return;
+      if (!threadA || !threadB || !pendingVote) return;
 
       try {
         setSavingSample(true);
@@ -308,23 +277,20 @@ export function ImproveChat({
 
         const ratings = ratingMap[pendingVote];
 
+        // Convert thread messages to API format
+        const convertToApiFormat = (messages: ConversationMessage[]) =>
+          messages.map((msg, idx) => ({
+            id: `${msg.role}-${Date.now()}-${idx}`,
+            role: msg.role,
+            parts: [{ type: "text", text: msg.content }],
+          }));
+
         // Save sample A
         await fetch("/api/samples", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            messages: [
-              {
-                id: `user-${Date.now()}`,
-                role: "user",
-                parts: [{ type: "text", text: currentRound.userMessage }],
-              },
-              {
-                id: `assistant-${Date.now()}`,
-                role: "assistant",
-                parts: [{ type: "text", text: currentRound.responseA }],
-              },
-            ],
+            messages: convertToApiFormat(threadA.messages),
             feedback: {
               rating: ratings.ratingA,
               comment: feedback.comment,
@@ -337,18 +303,7 @@ export function ImproveChat({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            messages: [
-              {
-                id: `user-${Date.now()}`,
-                role: "user",
-                parts: [{ type: "text", text: currentRound.userMessage }],
-              },
-              {
-                id: `assistant-${Date.now()}`,
-                role: "assistant",
-                parts: [{ type: "text", text: currentRound.responseB }],
-              },
-            ],
+            messages: convertToApiFormat(threadB.messages),
             feedback: {
               rating: ratings.ratingB,
               comment: feedback.comment,
@@ -356,36 +311,76 @@ export function ImproveChat({
           }),
         });
 
-        // Update prompt with winner (if applicable)
-        if (pendingVote === "a-better") {
-          await fetch("/api/prompt", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ prompt: currentRound.variantA }),
-          });
-        } else if (pendingVote === "b-better") {
-          await fetch("/api/prompt", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ prompt: currentRound.variantB }),
-          });
+        // Update prompt with winner
+        try {
+          if (pendingVote === "a-better") {
+            console.log(
+              "[ImproveChat] Updating prompt with variant A:",
+              threadA.systemPrompt
+            );
+            const response = await fetch("/api/prompt", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ prompt: threadA.systemPrompt }),
+            });
+
+            if (!response.ok) {
+              throw new Error(`Failed to update prompt: ${response.status}`);
+            }
+
+            const result = await response.json();
+            console.log("[ImproveChat] Prompt updated successfully:", result);
+            toast.success("Samples saved and prompt updated with variant A");
+
+            // Notify parent to refresh prompt editor
+            onPromptUpdate?.();
+          } else if (pendingVote === "b-better") {
+            console.log(
+              "[ImproveChat] Updating prompt with variant B:",
+              threadB.systemPrompt
+            );
+            const response = await fetch("/api/prompt", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ prompt: threadB.systemPrompt }),
+            });
+
+            if (!response.ok) {
+              throw new Error(`Failed to update prompt: ${response.status}`);
+            }
+
+            const result = await response.json();
+            console.log("[ImproveChat] Prompt updated successfully:", result);
+            toast.success("Samples saved and prompt updated with variant B");
+
+            // Notify parent to refresh prompt editor
+            onPromptUpdate?.();
+          } else {
+            toast.success("Samples saved successfully");
+          }
+        } catch (error) {
+          console.error("[ImproveChat] Error updating prompt:", error);
+          toast.error("Samples saved but failed to update prompt");
         }
 
-        toast.success("Samples saved successfully");
-
-        // Move current round to history
-        setHistory((prev) => [...prev, currentRound]);
-        setCurrentRound(null);
         setPendingVote(null);
         setFeedbackDialogOpen(false);
+
+        // Clear threads since new prompt is active
+        setThreadA(null);
+        setThreadB(null);
+        setVotingEnabled(false);
+
+        // Notify parent if needed
+        onChatReset?.();
       } catch (error) {
-        console.error("Error saving samples:", error);
+        console.error("[ImproveChat] Error saving samples:", error);
         toast.error("Failed to save samples");
       } finally {
         setSavingSample(false);
       }
     },
-    [currentRound, pendingVote]
+    [threadA, threadB, pendingVote, onChatReset]
   );
 
   const getVoteMessage = () => {
@@ -399,110 +394,105 @@ export function ImproveChat({
     return messages[pendingVote];
   };
 
+  // Get the number of exchanges in the conversation
+  const exchangeCount = threadA
+    ? Math.ceil(threadA.messages.filter((m) => m.role === "user").length)
+    : 0;
+
   return (
     <div className="h-full flex flex-col">
       <div className="flex-1 min-h-0 overflow-hidden">
         <div className="h-full flex flex-col px-6">
           <Conversation className="flex-1 min-h-0">
             <ConversationContent>
-              {!currentRound && history.length === 0 ? (
+              {!threadA || !threadB ? (
                 <ConversationEmptyState
                   icon={<MessageSquare className="size-12" />}
                   title="Improve Mode"
-                  description="Each message generates two prompt variants for comparison"
+                  description="Each message generates two prompt variants for side-by-side comparison"
                 />
               ) : (
                 <div className="space-y-8">
-                  {/* History */}
-                  {history.map((round, idx) => (
-                    <div key={idx} className="space-y-4">
-                      <Message from="user">
-                        <MessageContent>
-                          <Response>{round.userMessage}</Response>
-                        </MessageContent>
-                      </Message>
+                  {Array.from({ length: exchangeCount }).map((_, exchangeIdx) => {
+                    const userMsgA = threadA.messages.filter(
+                      (m) => m.role === "user"
+                    )[exchangeIdx];
+                    const assistantMsgA = threadA.messages.filter(
+                      (m) => m.role === "assistant"
+                    )[exchangeIdx];
+                    const assistantMsgB = threadB.messages.filter(
+                      (m) => m.role === "assistant"
+                    )[exchangeIdx];
 
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="border rounded-lg p-4">
-                          <div className="text-xs font-medium text-muted-foreground mb-2">
-                            Response A
-                          </div>
-                          <div className="text-sm">{round.responseA}</div>
-                        </div>
-                        <div className="border rounded-lg p-4">
-                          <div className="text-xs font-medium text-muted-foreground mb-2">
-                            Response B
-                          </div>
-                          <div className="text-sm">{round.responseB}</div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-
-                  {/* Current Round */}
-                  {currentRound && (
-                    <div className="space-y-4">
-                      <Message from="user">
-                        <MessageContent>
-                          <Response>{currentRound.userMessage}</Response>
-                        </MessageContent>
-                      </Message>
-
-                      <div className="space-y-4">
-                        {/* Response A */}
-                        <div className="border-2 rounded-lg p-4 bg-card">
-                          <div className="text-sm font-semibold mb-3 flex items-center justify-between">
-                            <span>Response A</span>
-                            {currentRound.streamingA && (
-                              <span className="text-xs text-muted-foreground">
-                                Streaming...
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-sm whitespace-pre-wrap">
-                            {currentRound.responseA || (
-                              <span className="text-muted-foreground">
-                                Waiting for response...
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Response B */}
-                        <div className="border-2 rounded-lg p-4 bg-card">
-                          <div className="text-sm font-semibold mb-3 flex items-center justify-between">
-                            <span>Response B</span>
-                            {currentRound.streamingB && (
-                              <span className="text-xs text-muted-foreground">
-                                Streaming...
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-sm whitespace-pre-wrap">
-                            {currentRound.responseB || (
-                              <span className="text-muted-foreground">
-                                Waiting for response...
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Voting Buttons */}
-                        {currentRound.votingEnabled && (
-                          <VotingButtons
-                            onVote={handleVote}
-                            disabled={savingSample}
-                          />
+                    return (
+                      <div key={exchangeIdx} className="space-y-4">
+                        {/* User message (shown once) */}
+                        {userMsgA && (
+                          <Message from="user">
+                            <MessageContent>
+                              <Response>{userMsgA.content}</Response>
+                            </MessageContent>
+                          </Message>
                         )}
+
+                        {/* Side-by-side responses */}
+                        <div className="space-y-4">
+                          {/* Response A */}
+                          <div className="border-2 rounded-lg p-4 bg-card">
+                            <div className="text-sm font-semibold mb-3 flex items-center justify-between">
+                              <span>Response A</span>
+                              {isStreaming && exchangeIdx === exchangeCount - 1 && (
+                                <span className="text-xs text-muted-foreground">
+                                  Streaming...
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-sm whitespace-pre-wrap">
+                              {assistantMsgA?.content || (
+                                <span className="text-muted-foreground">
+                                  Waiting for response...
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Response B */}
+                          <div className="border-2 rounded-lg p-4 bg-card">
+                            <div className="text-sm font-semibold mb-3 flex items-center justify-between">
+                              <span>Response B</span>
+                              {isStreaming && exchangeIdx === exchangeCount - 1 && (
+                                <span className="text-xs text-muted-foreground">
+                                  Streaming...
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-sm whitespace-pre-wrap">
+                              {assistantMsgB?.content || (
+                                <span className="text-muted-foreground">
+                                  Waiting for response...
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })}
                 </div>
               )}
             </ConversationContent>
           </Conversation>
         </div>
       </div>
+
+      {/* Fixed Voting Bar - above input */}
+      {votingEnabled && (
+        <div className="py-4 px-6 flex items-center justify-center">
+          <div className="inline-flex items-center justify-center bg-card border rounded-xl shadow-sm px-2 py-2">
+            <VotingButtons onVote={handleVote} disabled={savingSample} />
+          </div>
+        </div>
+      )}
 
       {/* Input Area */}
       <div className="border-t bg-background/90 backdrop-blur supports-[backdrop-filter]:bg-background/75">
@@ -512,7 +502,7 @@ export function ImproveChat({
               <PromptInputTextarea
                 placeholder="Type your message..."
                 className="min-h-[44px] max-h-[200px]"
-                disabled={!!currentRound || isGeneratingVariants}
+                disabled={isStreaming || isGeneratingVariants}
               />
             </PromptInputBody>
             <PromptInputToolbar>
@@ -547,8 +537,8 @@ export function ImproveChat({
               </PromptInputTools>
               <div className="flex items-center gap-1 ml-auto">
                 <PromptInputSubmit
-                  status={currentRound || isGeneratingVariants ? "streaming" : "ready"}
-                  disabled={!!currentRound || isGeneratingVariants}
+                  status={isStreaming || isGeneratingVariants ? "streaming" : "ready"}
+                  disabled={isStreaming || isGeneratingVariants}
                 />
               </div>
             </PromptInputToolbar>
@@ -563,6 +553,7 @@ export function ImproveChat({
         onSave={handleSaveWithFeedback}
         isSaving={savingSample}
         autoMessage={getVoteMessage()}
+        hideRatingButtons={true}
       />
     </div>
   );

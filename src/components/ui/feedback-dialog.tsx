@@ -23,6 +23,7 @@ interface FeedbackDialogProps {
   }) => void;
   isSaving?: boolean;
   autoMessage?: string;
+  hideRatingButtons?: boolean;
 }
 
 export function FeedbackDialog({
@@ -31,9 +32,17 @@ export function FeedbackDialog({
   onSave,
   isSaving = false,
   autoMessage,
+  hideRatingButtons = false,
 }: FeedbackDialogProps) {
   const [rating, setRating] = useState<"positive" | "negative" | null>(null);
   const [comment, setComment] = useState("");
+
+  // Auto-set rating when buttons are hidden (Improve Mode)
+  useEffect(() => {
+    if (hideRatingButtons && open) {
+      setRating("positive"); // Arbitrary, since ImproveChat provides actual ratings
+    }
+  }, [hideRatingButtons, open]);
 
   const handleSave = () => {
     if (!rating) return;
@@ -91,40 +100,42 @@ export function FeedbackDialog({
               </p>
             </div>
           )}
-          {/* Rating buttons */}
-          <div className="flex items-center justify-center gap-4">
-            <Button
-              type="button"
-              variant={rating === "positive" ? "default" : "outline"}
-              size="lg"
-              onClick={() => setRating("positive")}
-              data-feedback="positive"
-              className={cn(
-                "flex flex-col items-center gap-2 h-auto py-4 px-8",
-                rating === "positive" &&
-                  "bg-green-600 hover:bg-green-700 text-white"
-              )}
-            >
-              <ThumbsUp className="size-8" />
-              <span className="text-sm font-medium">Good</span>
-            </Button>
+          {/* Rating buttons - hidden in Improve Mode */}
+          {!hideRatingButtons && (
+            <div className="flex items-center justify-center gap-4">
+              <Button
+                type="button"
+                variant={rating === "positive" ? "default" : "outline"}
+                size="lg"
+                onClick={() => setRating("positive")}
+                data-feedback="positive"
+                className={cn(
+                  "flex flex-col items-center gap-2 h-auto py-4 px-8",
+                  rating === "positive" &&
+                    "bg-green-600 hover:bg-green-700 text-white"
+                )}
+              >
+                <ThumbsUp className="size-8" />
+                <span className="text-sm font-medium">Good</span>
+              </Button>
 
-            <Button
-              type="button"
-              variant={rating === "negative" ? "default" : "outline"}
-              size="lg"
-              onClick={() => setRating("negative")}
-              data-feedback="negative"
-              className={cn(
-                "flex flex-col items-center gap-2 h-auto py-4 px-8",
-                rating === "negative" &&
-                  "bg-red-600 hover:bg-red-700 text-white"
-              )}
-            >
-              <ThumbsDown className="size-8" />
-              <span className="text-sm font-medium">Bad</span>
-            </Button>
-          </div>
+              <Button
+                type="button"
+                variant={rating === "negative" ? "default" : "outline"}
+                size="lg"
+                onClick={() => setRating("negative")}
+                data-feedback="negative"
+                className={cn(
+                  "flex flex-col items-center gap-2 h-auto py-4 px-8",
+                  rating === "negative" &&
+                    "bg-red-600 hover:bg-red-700 text-white"
+                )}
+              >
+                <ThumbsDown className="size-8" />
+                <span className="text-sm font-medium">Bad</span>
+              </Button>
+            </div>
+          )}
 
           {/* Optional comment field */}
           <div className="space-y-2">
