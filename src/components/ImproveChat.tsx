@@ -46,6 +46,13 @@ type Thread = {
   messages: ConversationMessage[];
 };
 
+type VariantAnalysis = {
+  exploitationStrategy: string;
+  explorationStrategy: string;
+  keyStrengths: string[];
+  keyIssues: string[];
+};
+
 export function ImproveChat({
   selectedModel,
   onModelChange,
@@ -63,6 +70,8 @@ export function ImproveChat({
   const [feedbackDialogOpen, setFeedbackDialogOpen] = useState(false);
   const [pendingVote, setPendingVote] = useState<VoteChoice | null>(null);
   const [savingSample, setSavingSample] = useState(false);
+  const [seedPrompt, setSeedPrompt] = useState<string>("");
+  const [variantAnalysis, setVariantAnalysis] = useState<VariantAnalysis | null>(null);
 
   const handleSubmit = useCallback(
     async (message: { text?: string; files?: unknown[] }) => {
@@ -89,7 +98,11 @@ export function ImproveChat({
             throw new Error("Failed to generate variants");
           }
 
-          const { variantA, variantB } = await variantsResponse.json();
+          const { variantA, variantB, seedPrompt: seed, analysis } = await variantsResponse.json();
+
+          // Store seed prompt and analysis for history tracking
+          setSeedPrompt(seed);
+          setVariantAnalysis(analysis);
 
           // Initialize threads with system prompts
           setThreadA({
@@ -311,6 +324,27 @@ export function ImproveChat({
           }),
         });
 
+        // Save improve history entry
+        try {
+          await fetch("/api/improve-history", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              seedPrompt,
+              variantAPrompt: threadA.systemPrompt,
+              variantBPrompt: threadB.systemPrompt,
+              variantAStrategy: variantAnalysis?.exploitationStrategy || "Variant A",
+              variantBStrategy: variantAnalysis?.explorationStrategy || "Variant B",
+              winner: pendingVote,
+            }),
+          });
+
+          console.log("[ImproveChat] Improve history saved with winner:", pendingVote);
+        } catch (error) {
+          console.error("[ImproveChat] Error saving improve history:", error);
+          // Don't fail the whole operation if history save fails
+        }
+
         // Update prompt with winner
         try {
           if (pendingVote === "a-better") {
@@ -380,7 +414,7 @@ export function ImproveChat({
         setSavingSample(false);
       }
     },
-    [threadA, threadB, pendingVote, onChatReset]
+    [threadA, threadB, pendingVote, seedPrompt, variantAnalysis, onPromptUpdate, onChatReset]
   );
 
   const getVoteMessage = () => {
