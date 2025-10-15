@@ -20,6 +20,7 @@ interface Sample {
     rating: "positive" | "negative";
     comment?: string;
   };
+  systemPrompt?: string; // Track which prompt generated this sample
 }
 
 interface SampleGroup {
@@ -168,6 +169,7 @@ ${positiveSamples
   .map(
     (s, idx) => `
 Example ${idx + 1}:
+System Prompt Used: ${s.systemPrompt ? `"${s.systemPrompt.substring(0, 150)}..."` : "Unknown (legacy sample)"}
 User: ${s.messages.find((m) => m.role === "user")?.content || "N/A"}
 Assistant: ${s.messages.find((m) => m.role === "assistant")?.content || "N/A"}
 Feedback: ${s.feedback?.comment || "No comment"}
@@ -181,6 +183,7 @@ ${negativeSamples
   .map(
     (s, idx) => `
 Example ${idx + 1}:
+System Prompt Used: ${s.systemPrompt ? `"${s.systemPrompt.substring(0, 150)}..."` : "Unknown (legacy sample)"}
 User: ${s.messages.find((m) => m.role === "user")?.content || "N/A"}
 Assistant: ${s.messages.find((m) => m.role === "assistant")?.content || "N/A"}
 Feedback: ${s.feedback?.comment || "No comment"}
@@ -225,12 +228,15 @@ Analyze the samples above and decide on TWO different variant strategies:
 2. **Exploration Variant**: Address issues from negative samples. Try new approaches.
 
 Your analysis should:
-- Identify concrete patterns (not generic observations)
+- **Identify prompt patterns**: Look at which system prompts led to positive vs negative samples
+- **Find correlations**: Do certain prompt phrasings, instructions, or tones correlate with better outcomes?
+- **Avoid what fails**: Notice which prompt elements appear in negative samples
+- **Leverage what works**: Identify prompt elements that consistently appear in positive samples
 - Focus on actionable insights from user feedback
 - Avoid repeating strategies from previous attempts (if any)
 - Balance refinement (exploit) with innovation (explore)
 
-Provide specific, targeted suggestions based on ACTUAL patterns in the data.`;
+Provide specific, targeted suggestions based on ACTUAL patterns in the data, especially focusing on which prompt characteristics led to success or failure.`;
 
   try {
     const result = await generateObject({

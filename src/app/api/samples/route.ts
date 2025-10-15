@@ -50,6 +50,7 @@ const SessionSchema = z.object({
   timestamp: z.string(),
   messages: z.array(MessageSchema),
   feedback: FeedbackSchema.optional(),
+  systemPrompt: z.string().optional(), // Track which prompt generated this sample
 });
 
 const SamplesSchema = z.object({
@@ -236,6 +237,7 @@ export async function POST(req: Request) {
             comment: json.feedback.comment,
           }
         : undefined,
+      systemPrompt: json.systemPrompt, // Capture the prompt that generated this sample
     };
 
     // Handle new groups structure

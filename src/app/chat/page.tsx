@@ -345,6 +345,7 @@ export default function Chat() {
         body: JSON.stringify({
           messages: samplesToSave,
           feedback,
+          systemPrompt: promptEditorContent, // Track which prompt generated this sample
         }),
       });
 

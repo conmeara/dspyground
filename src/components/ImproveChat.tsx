@@ -140,9 +140,10 @@ export function ImproveChat({
 
           // Initialize threads with system prompts
           // If we have conversation history (from loop mode), prepend it
-          const initialMessages = conversationHistory.length > 0
-            ? [...conversationHistory, { role: "user", content: text }]
-            : [{ role: "user", content: text }];
+          const newUserMessage: ConversationMessage = { role: "user", content: text };
+          const initialMessages: ConversationMessage[] = conversationHistory.length > 0
+            ? [...conversationHistory, newUserMessage]
+            : [newUserMessage];
 
           setThreadA({
             systemPrompt: variantA,
@@ -355,6 +356,7 @@ export function ImproveChat({
               rating: ratings.ratingA,
               comment: feedback.comment,
             },
+            systemPrompt: threadA.systemPrompt, // Track which prompt generated this sample
           }),
         });
 
@@ -368,6 +370,7 @@ export function ImproveChat({
               rating: ratings.ratingB,
               comment: feedback.comment,
             },
+            systemPrompt: threadB.systemPrompt, // Track which prompt generated this sample
           }),
         });
 

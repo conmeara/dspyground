@@ -138,6 +138,11 @@ pids
 *.seed
 *.pid.lock
 
+# DSPyground user data and config (dev mode)
+/data/
+dspyground.config.ts
+.dspyground/
+
 # Optional npm cache directory
 .npm
 
