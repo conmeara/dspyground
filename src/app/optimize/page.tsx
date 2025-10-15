@@ -319,7 +319,7 @@ export default function OptimizePage() {
         if (res.ok) {
           const prefs = await res.json();
           setOptimizationModel(prefs.optimizationModel || "openai/gpt-4o-mini");
-          setReflectionModel(prefs.reflectionModel || "openai/gpt-4o");
+          setReflectionModel(prefs.reflectionModel || "anthropic/claude-haiku-4.5");
           setBatchSize(prefs.batchSize || 3);
           setNumRollouts(prefs.numRollouts || 10);
           setSelectedMetrics(prefs.selectedMetrics || ["tone", "accuracy"]);

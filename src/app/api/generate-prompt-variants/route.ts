@@ -320,7 +320,7 @@ Return ONLY the improved prompt text, nothing else.`;
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const reflectionModel = body.reflectionModel || "openai/gpt-4o";
+    const reflectionModel = body.reflectionModel || "anthropic/claude-haiku-4.5";
 
     // Load current prompt and group data
     const currentPrompt = await loadPrompt();

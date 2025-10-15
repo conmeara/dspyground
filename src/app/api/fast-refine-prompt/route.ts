@@ -16,7 +16,7 @@ interface RefineRequest {
 export async function POST(req: Request) {
   try {
     const body: RefineRequest = await req.json();
-    const { winningPrompt, userComment, reflectionModel = "openai/gpt-4o" } = body;
+    const { winningPrompt, userComment, reflectionModel = "anthropic/claude-haiku-4.5" } = body;
 
     if (!winningPrompt) {
       return new Response(

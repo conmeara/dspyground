@@ -60,7 +60,7 @@ export function ImproveChat({
   onModelChange,
   textModels,
   preferencesLoaded,
-  reflectionModel = "openai/gpt-4o",
+  reflectionModel = "anthropic/claude-haiku-4.5",
   onPromptUpdate,
   onChatReset,
   onRefinementStatusChange,

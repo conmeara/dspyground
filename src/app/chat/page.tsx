@@ -64,6 +64,7 @@ import {
   Database,
   MessageSquare,
   Plus,
+  Sparkles,
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -109,6 +110,7 @@ export default function Chat() {
   const [selectedRunId, setSelectedRunId] = useState<string>("");
   const [isRefiningPrompt, setIsRefiningPrompt] = useState(false);
   const [showPromptFlash, setShowPromptFlash] = useState(false);
+  const [isImprovingPrompt, setIsImprovingPrompt] = useState(false);
 
   // Wrap setSelectedModel to prevent empty values
   const setSelectedModel = useCallback(
@@ -650,6 +652,39 @@ export default function Chat() {
     }
   };
 
+  const handleImprovePrompt = async () => {
+    if (!promptEditorContent.trim()) {
+      toast.error("Please enter a prompt first");
+      return;
+    }
+
+    try {
+      setIsImprovingPrompt(true);
+      const res = await fetch("/api/improve-prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: promptEditorContent,
+          model: selectedModel || "openai/gpt-4o",
+        }),
+      });
+
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to improve prompt");
+      }
+
+      const data = await res.json();
+      setPromptEditorContent(data.improvedPrompt);
+      toast.success("Prompt improved successfully");
+    } catch (error) {
+      console.error("Error improving prompt:", error);
+      toast.error(error instanceof Error ? error.message : "Failed to improve prompt");
+    } finally {
+      setIsImprovingPrompt(false);
+    }
+  };
+
   const formatDate = (timestamp: string) => {
     const date = new Date(timestamp);
     return new Intl.DateTimeFormat("en-US", {
@@ -729,6 +764,29 @@ export default function Chat() {
       <div className="flex-1 min-h-0 overflow-hidden flex">
         {/* Left: Prompt Editor */}
         <div className="w-1/2 border-r flex flex-col">
+          {/* Improve Prompt Button Header */}
+          <div className="border-b px-4 py-3 flex items-center justify-between bg-background">
+            <h3 className="text-sm font-medium text-muted-foreground">System Prompt</h3>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleImprovePrompt}
+                    disabled={isImprovingPrompt || isLoadingPrompt || !promptEditorContent.trim()}
+                    className="h-8"
+                  >
+                    <Sparkles className="size-4 mr-2" />
+                    {isImprovingPrompt ? "Improving..." : "Improve Prompt"}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Applies prompt engineering best practices</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
           <div className="flex-1 min-h-0 p-4">
             {isLoadingPrompt ? (
               <div className="flex items-center justify-center h-full text-muted-foreground">
@@ -740,7 +798,7 @@ export default function Chat() {
                 onChange={(e) => setPromptEditorContent(e.target.value)}
                 placeholder="Enter your system prompt here..."
                 className={`h-full font-mono text-sm resize-none transition-all duration-300 ${
-                  isRefiningPrompt
+                  isRefiningPrompt || isImprovingPrompt
                     ? "ring-2 ring-blue-400 ring-offset-2 shadow-lg shadow-blue-400/20"
                     : showPromptFlash
                     ? "ring-2 ring-blue-400 ring-offset-2"
@@ -751,8 +809,7 @@ export default function Chat() {
           </div>
           <div className="border-t bg-background/90 backdrop-blur supports-[backdrop-filter]:bg-background/75">
             <div className="px-6 py-4">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-sm font-medium">System Prompt</h3>
+              <div className="flex items-center justify-end mb-3">
                 <Button
                   size="sm"
                   onClick={handleSavePrompt}
