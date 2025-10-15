@@ -107,6 +107,8 @@ export default function Chat() {
   const [isSavingPrompt, setIsSavingPrompt] = useState(false);
   const [runs, setRuns] = useState<any[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string>("");
+  const [isRefiningPrompt, setIsRefiningPrompt] = useState(false);
+  const [showPromptFlash, setShowPromptFlash] = useState(false);
 
   // Wrap setSelectedModel to prevent empty values
   const setSelectedModel = useCallback(
@@ -587,6 +589,17 @@ export default function Chat() {
     }
   };
 
+  // Handle refinement status change from ImproveChat
+  const handleRefinementStatusChange = useCallback((isRefining: boolean) => {
+    setIsRefiningPrompt(isRefining);
+
+    // If refinement just finished, trigger a quick flash
+    if (!isRefining) {
+      setShowPromptFlash(true);
+      setTimeout(() => setShowPromptFlash(false), 1000);
+    }
+  }, []);
+
   const loadOptimizationRuns = async () => {
     try {
       const res = await fetch("/api/runs");
@@ -725,7 +738,13 @@ export default function Chat() {
                 value={promptEditorContent}
                 onChange={(e) => setPromptEditorContent(e.target.value)}
                 placeholder="Enter your system prompt here..."
-                className="h-full font-mono text-sm resize-none"
+                className={`h-full font-mono text-sm resize-none transition-all duration-300 ${
+                  isRefiningPrompt
+                    ? "ring-2 ring-blue-400 ring-offset-2 shadow-lg shadow-blue-400/20"
+                    : showPromptFlash
+                    ? "ring-2 ring-blue-400 ring-offset-2"
+                    : ""
+                }`}
               />
             )}
           </div>
@@ -783,6 +802,7 @@ export default function Chat() {
                 // Optional: Add any additional reset logic here
                 console.log("Chat reset after sample save");
               }}
+              onRefinementStatusChange={handleRefinementStatusChange}
             />
           ) : (
             <>

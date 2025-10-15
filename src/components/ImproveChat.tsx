@@ -20,10 +20,11 @@ import {
   PromptInputTools,
 } from "@/components/ai-elements/prompt-input";
 import { Response } from "@/components/ai-elements/response";
+import { Button } from "@/components/ui/button";
 import { FeedbackDialog } from "@/components/ui/feedback-dialog";
 import { type VoteChoice, VotingButtons } from "@/components/ui/voting-buttons";
-import { MessageSquare } from "lucide-react";
-import { useCallback, useState } from "react";
+import { MessageSquare, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 interface ImproveChatProps {
@@ -34,6 +35,7 @@ interface ImproveChatProps {
   reflectionModel?: string;
   onPromptUpdate?: () => void;
   onChatReset?: () => void;
+  onRefinementStatusChange?: (isRefining: boolean) => void;
 }
 
 type ConversationMessage = {
@@ -61,6 +63,7 @@ export function ImproveChat({
   reflectionModel = "openai/gpt-4o",
   onPromptUpdate,
   onChatReset,
+  onRefinementStatusChange,
 }: ImproveChatProps) {
   const [threadA, setThreadA] = useState<Thread | null>(null);
   const [threadB, setThreadB] = useState<Thread | null>(null);
@@ -72,6 +75,35 @@ export function ImproveChat({
   const [savingSample, setSavingSample] = useState(false);
   const [seedPrompt, setSeedPrompt] = useState<string>("");
   const [variantAnalysis, setVariantAnalysis] = useState<VariantAnalysis | null>(null);
+  const [loopEnabled, setLoopEnabled] = useState(false);
+  const [lastUserMessage, setLastUserMessage] = useState("");
+  const [isRefining, setIsRefining] = useState(false);
+  const [conversationHistory, setConversationHistory] = useState<ConversationMessage[]>([]);
+  const [shouldResubmit, setShouldResubmit] = useState(false);
+  const [pendingUserMessage, setPendingUserMessage] = useState<string | null>(null);
+
+  // Track last user message for resubmission
+  useEffect(() => {
+    if (threadA?.messages) {
+      const userMessages = threadA.messages.filter((m) => m.role === "user");
+      if (userMessages.length > 0) {
+        const lastMsg = userMessages[userMessages.length - 1];
+        setLastUserMessage(lastMsg.content);
+      }
+    }
+  }, [threadA]);
+
+  // Handle auto-resubmit when shouldResubmit is set
+  useEffect(() => {
+    if (shouldResubmit && lastUserMessage) {
+      setShouldResubmit(false);
+      console.log("[ImproveChat] Auto-resubmitting:", lastUserMessage);
+      // Call handleSubmit without including it in dependencies to avoid circular dependency
+      // The latest version will be called due to closure
+      handleSubmit({ text: lastUserMessage });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shouldResubmit, lastUserMessage]);
 
   const handleSubmit = useCallback(
     async (message: { text?: string; files?: unknown[] }) => {
@@ -86,6 +118,8 @@ export function ImproveChat({
 
         // First message: generate variants and initialize threads
         if (isFirstMessage) {
+          // Show user message immediately for better UX
+          setPendingUserMessage(text);
           setIsGeneratingVariants(true);
 
           const variantsResponse = await fetch("/api/generate-prompt-variants", {
@@ -105,15 +139,27 @@ export function ImproveChat({
           setVariantAnalysis(analysis);
 
           // Initialize threads with system prompts
+          // If we have conversation history (from loop mode), prepend it
+          const initialMessages = conversationHistory.length > 0
+            ? [...conversationHistory, { role: "user", content: text }]
+            : [{ role: "user", content: text }];
+
           setThreadA({
             systemPrompt: variantA,
-            messages: [{ role: "user", content: text }],
+            messages: initialMessages,
           });
           setThreadB({
             systemPrompt: variantB,
-            messages: [{ role: "user", content: text }],
+            messages: initialMessages,
           });
 
+          // Clear conversation history after restoring
+          if (conversationHistory.length > 0) {
+            setConversationHistory([]);
+          }
+
+          // Clear pending message now that threads are initialized
+          setPendingUserMessage(null);
           setIsGeneratingVariants(false);
 
           // Stream both responses
@@ -151,11 +197,12 @@ export function ImproveChat({
         console.error("[ImproveChat] Error in handleSubmit:", error);
         toast.error("Failed to generate responses");
         setIsGeneratingVariants(false);
+        setPendingUserMessage(null); // Clear pending message on error
       } finally {
         setIsStreaming(false);
       }
     },
-    [selectedModel, reflectionModel, threadA, threadB]
+    [selectedModel, reflectionModel, threadA, threadB, conversationHistory]
   );
 
   const streamResponse = async (
@@ -345,68 +392,119 @@ export function ImproveChat({
           // Don't fail the whole operation if history save fails
         }
 
-        // Update prompt with winner
-        try {
-          if (pendingVote === "a-better") {
-            console.log(
-              "[ImproveChat] Updating prompt with variant A:",
-              threadA.systemPrompt
-            );
-            const response = await fetch("/api/prompt", {
+        // Determine winning prompt
+        let winningPrompt: string | null = null;
+        if (pendingVote === "a-better") {
+          winningPrompt = threadA.systemPrompt;
+        } else if (pendingVote === "b-better") {
+          winningPrompt = threadB.systemPrompt;
+        } else if (pendingVote === "tie") {
+          // For tie, use variant A as base for refinement
+          winningPrompt = threadA.systemPrompt;
+        } else if (pendingVote === "both-bad") {
+          // For both-bad, use the seed prompt as base for refinement
+          winningPrompt = seedPrompt;
+        }
+
+        let finalPrompt = winningPrompt;
+
+        // Refine prompt if there's a comment (for all vote types)
+        if (winningPrompt && feedback.comment?.trim()) {
+          try {
+            setIsRefining(true);
+            onRefinementStatusChange?.(true);
+
+            toast.info("Refining prompt based on your feedback...");
+
+            const refineResponse = await fetch("/api/fast-refine-prompt", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ prompt: threadA.systemPrompt }),
+              body: JSON.stringify({
+                winningPrompt,
+                userComment: feedback.comment,
+                reflectionModel,
+              }),
             });
 
-            if (!response.ok) {
-              throw new Error(`Failed to update prompt: ${response.status}`);
+            if (refineResponse.ok) {
+              const { refinedPrompt } = await refineResponse.json();
+              finalPrompt = refinedPrompt;
+              console.log("[ImproveChat] Prompt refined based on comment");
             }
-
-            const result = await response.json();
-            console.log("[ImproveChat] Prompt updated successfully:", result);
-            toast.success("Samples saved and prompt updated with variant A");
-
-            // Notify parent to refresh prompt editor
-            onPromptUpdate?.();
-          } else if (pendingVote === "b-better") {
-            console.log(
-              "[ImproveChat] Updating prompt with variant B:",
-              threadB.systemPrompt
-            );
-            const response = await fetch("/api/prompt", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ prompt: threadB.systemPrompt }),
-            });
-
-            if (!response.ok) {
-              throw new Error(`Failed to update prompt: ${response.status}`);
-            }
-
-            const result = await response.json();
-            console.log("[ImproveChat] Prompt updated successfully:", result);
-            toast.success("Samples saved and prompt updated with variant B");
-
-            // Notify parent to refresh prompt editor
-            onPromptUpdate?.();
-          } else {
-            toast.success("Samples saved successfully");
+          } catch (error) {
+            console.error("[ImproveChat] Error refining prompt:", error);
+            // Fall back to winning prompt if refinement fails
+            finalPrompt = winningPrompt;
+          } finally {
+            setIsRefining(false);
+            onRefinementStatusChange?.(false);
           }
-        } catch (error) {
-          console.error("[ImproveChat] Error updating prompt:", error);
-          toast.error("Samples saved but failed to update prompt");
+        }
+
+        // Update prompt with final version (refined or winner)
+        if (finalPrompt) {
+          try {
+            console.log("[ImproveChat] Saving final prompt");
+
+            const response = await fetch("/api/prompt", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ prompt: finalPrompt }),
+            });
+
+            if (!response.ok) {
+              throw new Error(`Failed to update prompt: ${response.status}`);
+            }
+
+            const wasRefined = finalPrompt !== winningPrompt;
+            const winnerLabel =
+              pendingVote === "a-better" ? "A" : pendingVote === "b-better" ? "B" : "saved";
+
+            toast.success(
+              wasRefined
+                ? `Prompt refined and saved (Variant ${winnerLabel})`
+                : `Prompt updated with Variant ${winnerLabel}`
+            );
+
+            // Notify parent to refresh prompt editor
+            onPromptUpdate?.();
+          } catch (error) {
+            console.error("[ImproveChat] Error updating prompt:", error);
+            toast.error("Samples saved but failed to update prompt");
+          }
+        } else {
+          toast.success("Samples saved successfully");
         }
 
         setPendingVote(null);
         setFeedbackDialogOpen(false);
 
-        // Clear threads since new prompt is active
-        setThreadA(null);
-        setThreadB(null);
-        setVotingEnabled(false);
+        // If loop enabled, prepare for auto-resubmit
+        if (loopEnabled && lastUserMessage && finalPrompt) {
+          // Save conversation history before clearing (excluding last user/assistant pair)
+          if (threadA?.messages && threadA.messages.length > 2) {
+            const historyMessages = threadA.messages.slice(0, -2);
+            setConversationHistory(historyMessages);
+          } else {
+            setConversationHistory([]);
+          }
 
-        // Notify parent if needed
-        onChatReset?.();
+          // Clear threads to trigger new variant generation
+          setThreadA(null);
+          setThreadB(null);
+          setVotingEnabled(false);
+
+          // Trigger auto-resubmit via effect (avoids circular dependency)
+          console.log("[ImproveChat] Triggering auto-resubmit for:", lastUserMessage);
+          setShouldResubmit(true);
+        } else {
+          // Loop disabled: clear threads and reset
+          setThreadA(null);
+          setThreadB(null);
+          setVotingEnabled(false);
+          setConversationHistory([]);
+          onChatReset?.();
+        }
       } catch (error) {
         console.error("[ImproveChat] Error saving samples:", error);
         toast.error("Failed to save samples");
@@ -414,7 +512,19 @@ export function ImproveChat({
         setSavingSample(false);
       }
     },
-    [threadA, threadB, pendingVote, seedPrompt, variantAnalysis, onPromptUpdate, onChatReset]
+    [
+      threadA,
+      threadB,
+      pendingVote,
+      seedPrompt,
+      variantAnalysis,
+      reflectionModel,
+      loopEnabled,
+      lastUserMessage,
+      onPromptUpdate,
+      onChatReset,
+      onRefinementStatusChange,
+    ]
   );
 
   const getVoteMessage = () => {
@@ -439,7 +549,24 @@ export function ImproveChat({
         <div className="h-full flex flex-col px-6">
           <Conversation className="flex-1 min-h-0">
             <ConversationContent>
-              {!threadA || !threadB ? (
+              {pendingUserMessage ? (
+                // Show pending user message during variant generation
+                <div className="space-y-8">
+                  <Message from="user">
+                    <MessageContent>
+                      <Response>{pendingUserMessage}</Response>
+                    </MessageContent>
+                  </Message>
+                  <div className="flex items-center justify-center py-8">
+                    <div className="flex items-center gap-3 text-muted-foreground">
+                      <div className="h-2 w-2 rounded-full bg-primary animate-pulse"></div>
+                      <div className="h-2 w-2 rounded-full bg-primary animate-pulse [animation-delay:0.2s]"></div>
+                      <div className="h-2 w-2 rounded-full bg-primary animate-pulse [animation-delay:0.4s]"></div>
+                      <span className="ml-2 text-sm">Exploring prompt variants...</span>
+                    </div>
+                  </div>
+                </div>
+              ) : !threadA || !threadB ? (
                 <ConversationEmptyState
                   icon={<MessageSquare className="size-12" />}
                   title="Improve Mode"
@@ -570,6 +697,17 @@ export function ImproveChat({
                 )}
               </PromptInputTools>
               <div className="flex items-center gap-1 ml-auto">
+                <Button
+                  type="button"
+                  variant={loopEnabled ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => setLoopEnabled(!loopEnabled)}
+                  disabled={isStreaming || isGeneratingVariants}
+                  title={loopEnabled ? "Auto-resubmit enabled" : "Enable auto-resubmit after voting"}
+                  className="h-8 w-8 p-0"
+                >
+                  <RefreshCw className={`h-4 w-4 ${loopEnabled ? "text-primary-foreground" : ""}`} />
+                </Button>
                 <PromptInputSubmit
                   status={isStreaming || isGeneratingVariants ? "streaming" : "ready"}
                   disabled={isStreaming || isGeneratingVariants}
