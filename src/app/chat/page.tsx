@@ -551,6 +551,8 @@ export default function Chat() {
 
       if (response.ok) {
         setCurrentGroupId(groupId);
+        // Clear chat state when switching groups to maintain session isolation
+        handleClear();
         toast.success("Sample group changed");
       } else {
         toast.error("Failed to change sample group");
@@ -851,6 +853,7 @@ export default function Chat() {
         <div className="w-1/2 flex flex-col">
           {improveMode ? (
             <ImproveChat
+              key={currentGroupId} // Force remount when group changes to ensure complete state reset
               selectedModel={selectedModel}
               onModelChange={setSelectedModel}
               textModels={textModels}
