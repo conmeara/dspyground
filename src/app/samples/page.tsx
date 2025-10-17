@@ -23,64 +23,32 @@ interface SampleGroup {
 }
 
 export default function SamplesPage() {
-  const [groups, setGroups] = useState<SampleGroup[]>([]);
-  const [selectedGroup, setSelectedGroup] = useState<SampleGroup | null>(null);
-  const [currentGroupId, setCurrentGroupId] = useState<string>("");
+  const [currentGroup, setCurrentGroup] = useState<SampleGroup | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadGroups();
+    loadCurrentGroup();
   }, []);
 
-  const loadGroups = async () => {
+  const loadCurrentGroup = async () => {
     try {
       setLoading(true);
       const response = await fetch("/api/sample-groups");
       if (response.ok) {
         const data = await response.json();
-        setGroups(data.groups || []);
-        setCurrentGroupId(data.currentGroupId || "");
-
-        // Select first group by default
-        if (data.groups && data.groups.length > 0 && !selectedGroup) {
-          setSelectedGroup(data.groups[0]);
-        }
+        const current = data.groups.find(
+          (g: SampleGroup) => g.id === data.currentGroupId
+        );
+        setCurrentGroup(current || null);
       }
     } catch (error) {
-      console.error("Failed to load sample groups:", error);
-      toast.error("Failed to load sample groups");
+      console.error("Failed to load current group:", error);
+      toast.error("Failed to load current group");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDeleteGroup = async (groupId: string) => {
-    if (groupId === "default") {
-      toast.error("Cannot delete default group");
-      return;
-    }
-
-    if (!confirm("Are you sure you want to delete this sample group?")) return;
-
-    try {
-      const response = await fetch(`/api/sample-groups?id=${groupId}`, {
-        method: "DELETE",
-      });
-
-      if (response.ok) {
-        toast.success("Sample group deleted");
-        if (selectedGroup?.id === groupId) {
-          setSelectedGroup(null);
-        }
-        await loadGroups();
-      } else {
-        toast.error("Failed to delete sample group");
-      }
-    } catch (error) {
-      console.error("Failed to delete sample group:", error);
-      toast.error("Failed to delete sample group");
-    }
-  };
 
   const formatDate = (timestamp: string) => {
     return new Date(timestamp).toLocaleString();
@@ -113,7 +81,9 @@ export default function SamplesPage() {
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <h1 className="text-xl font-medium">Sample Groups</h1>
+              <h1 className="text-xl font-medium">
+                Samples {currentGroup && `- ${currentGroup.name}`}
+              </h1>
               <ThemeToggle />
             </div>
           </div>
@@ -122,125 +92,45 @@ export default function SamplesPage() {
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-6 py-6">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left Panel: Groups List */}
-          <div className="lg:col-span-1">
-            <div className="border rounded-lg bg-card overflow-hidden">
-              <div className="p-4 border-b">
-                <h2 className="font-semibold">Sample Groups</h2>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {groups.length} group{groups.length !== 1 ? "s" : ""} total
-                </p>
-              </div>
-
-              <div className="max-h-[calc(100vh-240px)] overflow-y-auto">
-                {loading ? (
-                  <div className="p-8 text-center text-muted-foreground">
-                    <Loader2 className="size-6 animate-spin mx-auto mb-2" />
-                    Loading groups...
-                  </div>
-                ) : groups.length === 0 ? (
-                  <div className="p-8 text-center text-muted-foreground">
-                    <Database className="size-12 mx-auto mb-2 opacity-50" />
-                    <p>No sample groups yet</p>
-                    <p className="text-xs mt-1">Create one in the Chat tab</p>
-                  </div>
-                ) : (
-                  <div className="divide-y">
-                    {groups.map((group) => (
-                      <div
-                        key={group.id}
-                        className={`p-4 cursor-pointer hover:bg-muted/50 transition-colors ${
-                          selectedGroup?.id === group.id ? "bg-muted" : ""
-                        }`}
-                        onClick={() => setSelectedGroup(group)}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="font-medium truncate">
-                                {group.name}
-                              </span>
-                              {group.id === currentGroupId && (
-                                <span className="text-xs bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-100 px-2 py-0.5 rounded">
-                                  Active
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                              <Clock className="size-3" />
-                              {formatDate(group.timestamp)}
-                            </div>
-                            <div className="text-xs text-muted-foreground mt-1">
-                              {group.samples.length} sample
-                              {group.samples.length !== 1 ? "s" : ""}
-                            </div>
-                          </div>
-                          <ChevronRight className="size-4 text-muted-foreground flex-shrink-0" />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
+        {loading ? (
+          <div className="border rounded-lg p-12 bg-card text-center">
+            <Loader2 className="size-12 animate-spin mx-auto mb-4 opacity-50" />
+            <p className="text-muted-foreground">Loading samples...</p>
           </div>
+        ) : !currentGroup ? (
+          <div className="border rounded-lg p-12 bg-card text-center">
+            <Database className="size-16 mx-auto mb-4 opacity-20" />
+            <p className="text-muted-foreground">No group selected</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Select a group from the sidebar
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {/* Group Info */}
+            <div className="border rounded-lg p-6 bg-card">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Clock className="size-4" />
+                {formatDate(currentGroup.timestamp)}
+              </div>
+              <p className="text-sm text-muted-foreground mt-2">
+                {currentGroup.samples.length} sample
+                {currentGroup.samples.length !== 1 ? "s" : ""} in this group
+              </p>
+            </div>
 
-          {/* Right Panel: Samples List */}
-          <div className="lg:col-span-2">
-            {!selectedGroup ? (
+            {/* Samples List */}
+            {currentGroup.samples.length === 0 ? (
               <div className="border rounded-lg p-12 bg-card text-center">
-                <Database className="size-16 mx-auto mb-4 opacity-20" />
-                <p className="text-muted-foreground">
-                  Select a group to view samples
+                <MessageSquare className="size-16 mx-auto mb-4 opacity-20" />
+                <p className="text-muted-foreground">No samples yet</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Samples will appear here as you add them from the Chat page
                 </p>
               </div>
             ) : (
-              <div className="space-y-6">
-                {/* Group Header */}
-                <div className="border rounded-lg p-6 bg-card">
-                  <div className="flex items-start justify-between mb-4">
-                    <div>
-                      <h2 className="text-lg font-semibold mb-2">
-                        {selectedGroup.name}
-                      </h2>
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Clock className="size-4" />
-                        {formatDate(selectedGroup.timestamp)}
-                      </div>
-                      <p className="text-sm text-muted-foreground mt-2">
-                        {selectedGroup.samples.length} sample
-                        {selectedGroup.samples.length !== 1 ? "s" : ""} in this
-                        group
-                      </p>
-                    </div>
-                    {selectedGroup.id !== "default" && (
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        onClick={() => handleDeleteGroup(selectedGroup.id)}
-                      >
-                        <Trash2 className="size-4 mr-2" />
-                        Delete Group
-                      </Button>
-                    )}
-                  </div>
-                </div>
-
-                {/* Samples List */}
-                {selectedGroup.samples.length === 0 ? (
-                  <div className="border rounded-lg p-12 bg-card text-center">
-                    <MessageSquare className="size-16 mx-auto mb-4 opacity-20" />
-                    <p className="text-muted-foreground">
-                      No samples in this group yet
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Samples will appear here as you add them from the Chat tab
-                    </p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {selectedGroup.samples.map((sample: any) => (
+              <div className="space-y-4">
+                {currentGroup.samples.map((sample: any) => (
                       <div
                         key={sample.id}
                         className="border rounded-lg p-6 bg-card"
@@ -305,7 +195,5 @@ export default function SamplesPage() {
             )}
           </div>
         </div>
-      </div>
-    </div>
   );
 }

@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { MetricPromptEditorDialog } from "@/components/ui/metric-prompt-editor-dialog";
 import { OptimizeLiveChart } from "@/components/ui/optimize-live-chart";
 import { PromptEditorDialog } from "@/components/ui/prompt-editor-dialog";
+import { SamplesDialog } from "@/components/ui/samples-dialog";
 import {
   Select,
   SelectContent,
@@ -18,7 +19,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import type { IterationResult, MetricType } from "@/lib/optimizer-types";
@@ -27,7 +27,23 @@ import {
   METRIC_DESCRIPTIONS,
   METRIC_LABELS,
 } from "@/lib/optimizer-types";
-import { Edit, Info, Loader2, Play, Square } from "lucide-react";
+import {
+  ArrowLeft,
+  CheckCircle,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  Database,
+  Edit,
+  Info,
+  Loader2,
+  Play,
+  Square,
+  Target,
+  Trash2,
+  XCircle,
+} from "lucide-react";
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -64,6 +80,34 @@ interface OptimizationState {
   finalPrompt: string;
 }
 
+interface RunPrompt {
+  iteration: number;
+  prompt: string;
+  accepted: boolean;
+  score: number;
+  metrics: Record<string, number | undefined>;
+}
+
+interface OptimizationRun {
+  id: string;
+  timestamp: string;
+  config: {
+    optimizationModel: string;
+    reflectionModel: string;
+    batchSize: number;
+    numRollouts: number;
+    selectedMetrics: string[];
+    useStructuredOutput: boolean;
+    sampleGroupId?: string;
+  };
+  prompts: RunPrompt[];
+  finalPrompt: string;
+  bestScore: number;
+  samplesUsed: string[];
+  collectionSize: number;
+  status: "running" | "completed" | "error";
+}
+
 export default function OptimizePage() {
   // Settings state
   const [systemPrompt, setSystemPrompt] = useState<string>("");
@@ -79,10 +123,12 @@ export default function OptimizePage() {
     useState<boolean>(false);
   const [sampleGroups, setSampleGroups] = useState<any[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<string>("");
+  const [currentGroupId, setCurrentGroupId] = useState<string>("");
 
   // Dialog state
   const [promptEditorOpen, setPromptEditorOpen] = useState(false);
   const [metricPromptEditorOpen, setMetricPromptEditorOpen] = useState(false);
+  const [samplesDialogOpen, setSamplesDialogOpen] = useState(false);
 
   // UI state
   const [textModels, setTextModels] = useState<GatewayModel[]>([]);
@@ -93,9 +139,13 @@ export default function OptimizePage() {
   const [finalPrompt, setFinalPrompt] = useState<string>("");
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const [streamLogs, setStreamLogs] = useState<StreamLogEntry[]>([]);
-  const [activeTab, setActiveTab] = useState<string>("settings");
   const logsEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Runs history state
+  const [runs, setRuns] = useState<OptimizationRun[]>([]);
+  const [selectedRun, setSelectedRun] = useState<OptimizationRun | null>(null);
+  const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
 
   // Save optimization state to localStorage
   const saveOptimizationState = useCallback(() => {
@@ -145,7 +195,6 @@ export default function OptimizePage() {
             setChartData(state.chartData);
             setIterations(state.iterations);
             setFinalPrompt(state.finalPrompt);
-            setActiveTab("progress");
 
             toast.info(
               "Previous optimization is still running. It may have been interrupted."
@@ -353,7 +402,7 @@ export default function OptimizePage() {
     })();
   }, []);
 
-  // Load sample groups
+  // Load sample groups and current group
   useEffect(() => {
     (async () => {
       try {
@@ -362,12 +411,36 @@ export default function OptimizePage() {
           const data = await res.json();
           setSampleGroups(data.groups || []);
           setSelectedGroupId(data.currentGroupId || "");
+          setCurrentGroupId(data.currentGroupId || "");
         }
       } catch (error) {
         console.error("Failed to load sample groups:", error);
       }
     })();
   }, []);
+
+  // Load runs history
+  const loadRuns = useCallback(async () => {
+    try {
+      const response = await fetch("/api/runs", { cache: "no-store" });
+      if (response.ok) {
+        const data = await response.json();
+        setRuns(data.runs || []);
+      }
+    } catch (error) {
+      console.error("Failed to load runs:", error);
+    }
+  }, []);
+
+  // Load runs on mount and when optimization completes
+  useEffect(() => {
+    loadRuns();
+  }, [loadRuns]);
+
+  // Filter runs by current group
+  const filteredRuns = runs.filter(
+    (run) => run.config.sampleGroupId === currentGroupId
+  );
 
   // Load system prompt function
   const loadSystemPrompt = useCallback(async () => {
@@ -482,7 +555,6 @@ export default function OptimizePage() {
     setFinalPrompt("");
     setStreamLogs([]);
     setCurrentRunId(null);
-    setActiveTab("progress"); // Switch to progress tab
 
     // Create abort controller for this run
     abortControllerRef.current = new AbortController();
@@ -638,6 +710,8 @@ export default function OptimizePage() {
               // Clear localStorage state when completed
               localStorage.removeItem("optimizationState");
               setCurrentRunId(null);
+              // Reload runs to show the new completed run
+              await loadRuns();
             }
 
             if (result.type === "error") {
@@ -666,6 +740,8 @@ export default function OptimizePage() {
     numRollouts,
     selectedMetrics,
     optimizeStructuredOutput,
+    selectedGroupId,
+    loadRuns,
   ]);
 
   const handleStop = async () => {
@@ -706,6 +782,68 @@ export default function OptimizePage() {
     setCurrentRunId(null);
   };
 
+  // Helper functions for runs history
+  const formatDate = (timestamp: string) => {
+    return new Date(timestamp).toLocaleString();
+  };
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case "completed":
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-100 text-xs font-medium">
+            <CheckCircle className="size-3" />
+            Completed
+          </span>
+        );
+      case "running":
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-100 text-xs font-medium">
+            <Loader2 className="size-3 animate-spin" />
+            Running
+          </span>
+        );
+      case "error":
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-100 text-xs font-medium">
+            <XCircle className="size-3" />
+            Error
+          </span>
+        );
+      default:
+        return null;
+    }
+  };
+
+  const getSampleGroupName = (groupId?: string) => {
+    if (!groupId) return "N/A";
+    const group = sampleGroups.find((g) => g.id === groupId);
+    return group ? group.name : groupId;
+  };
+
+  const handleDeleteRun = async (runId: string) => {
+    if (!confirm("Are you sure you want to delete this run?")) return;
+
+    try {
+      const response = await fetch(`/api/runs?id=${runId}`, {
+        method: "DELETE",
+      });
+
+      if (response.ok) {
+        toast.success("Run deleted");
+        if (selectedRun?.id === runId) {
+          setSelectedRun(null);
+        }
+        await loadRuns();
+      } else {
+        toast.error("Failed to delete run");
+      }
+    } catch (error) {
+      console.error("Failed to delete run:", error);
+      toast.error("Failed to delete run");
+    }
+  };
+
   return (
     <div className="font-sans w-full min-h-screen bg-background">
       {/* Header */}
@@ -713,317 +851,320 @@ export default function OptimizePage() {
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
+              <Button variant="ghost" size="sm" asChild>
+                <Link href="/chat">
+                  <ArrowLeft className="size-4 mr-2" />
+                  Back to Chat
+                </Link>
+              </Button>
               <h1 className="text-xl font-medium">Prompt Optimizer</h1>
               <ThemeToggle />
+            </div>
+            <div className="flex items-center gap-3">
+              <Button variant="outline" size="sm" onClick={() => setSamplesDialogOpen(true)}>
+                <Database className="size-4 mr-2" />
+                Samples
+              </Button>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Main Content */}
-      <div className="max-w-7xl mx-auto px-6 py-6">
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="mb-6">
-            <TabsTrigger value="settings">Settings</TabsTrigger>
-            <TabsTrigger value="progress">Progress</TabsTrigger>
-          </TabsList>
-
-          {/* Settings Tab */}
-          <TabsContent value="settings" className="mt-0">
-            {currentRunId && !isOptimizing && (
-              <div className="mb-4 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-amber-800 dark:text-amber-200">
-                    <Loader2 className="size-4" />
-                    <p className="text-sm font-medium">
-                      An optimization run was in progress. View it in the
-                      Progress tab or clear it to start a new one.
-                    </p>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      localStorage.removeItem("optimizationState");
-                      setCurrentRunId(null);
-                      setStreamLogs([]);
-                      setChartData([]);
-                      setIterations([]);
-                      setFinalPrompt("");
-                      toast.info("Previous run cleared");
-                    }}
-                  >
-                    Clear Run
-                  </Button>
-                </div>
+      {/* Main Content - Single Scrollable Layout */}
+      <div className="max-w-7xl mx-auto px-6 py-6 space-y-8">
+        {/* Warning for interrupted run */}
+        {currentRunId && !isOptimizing && (
+          <div className="p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-amber-800 dark:text-amber-200">
+                <Loader2 className="size-4" />
+                <p className="text-sm font-medium">
+                  An optimization run was in progress. Scroll down to view
+                  progress or clear it to start a new one.
+                </p>
               </div>
-            )}
-
-            <div className="flex gap-6">
-              <div className="flex-1 space-y-6">
-                <div className="border rounded-lg p-6 bg-card">
-                  <h2 className="text-lg font-semibold mb-4">Configuration</h2>
-
-                  {/* System Prompt (Read-only) */}
-                  <div className="space-y-2 mb-4">
-                    <div className="flex items-center justify-between">
-                      <label className="text-sm font-medium">
-                        System Prompt (from prompt.md)
-                      </label>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setPromptEditorOpen(true)}
-                        className="h-7 gap-1.5"
-                      >
-                        <Edit className="h-3.5 w-3.5" />
-                        Edit
-                      </Button>
-                    </div>
-                    <Textarea
-                      value={systemPrompt}
-                      readOnly
-                      className="min-h-[100px] font-mono text-xs bg-muted cursor-pointer"
-                      placeholder="Loading prompt..."
-                      onClick={() => setPromptEditorOpen(true)}
-                    />
-                  </div>
-
-                  <Separator className="my-4" />
-
-                  {/* Optimization Model */}
-                  <div className="space-y-2 mb-4">
-                    <label className="text-sm font-medium">
-                      Optimization Model (Task Model)
-                    </label>
-                    <Select
-                      value={optimizationModel}
-                      onValueChange={setOptimizationModel}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select model" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {textModels.map((m) => (
-                          <SelectItem key={m.id} value={m.id}>
-                            {m.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  {/* Reflection Model */}
-                  <div className="space-y-2 mb-4">
-                    <label className="text-sm font-medium">
-                      Reflection Model (Improves Prompts)
-                    </label>
-                    <Select
-                      value={reflectionModel}
-                      onValueChange={setReflectionModel}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select model" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {textModels.map((m) => (
-                          <SelectItem key={m.id} value={m.id}>
-                            {m.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <Separator className="my-4" />
-
-                  {/* Batch Size */}
-                  <div className="space-y-2 mb-4">
-                    <label className="text-sm font-medium">
-                      Batch Size (samples per iteration)
-                    </label>
-                    <Input
-                      type="number"
-                      min="1"
-                      max="10"
-                      value={batchSize}
-                      onChange={(e) => setBatchSize(Number(e.target.value))}
-                    />
-                  </div>
-
-                  {/* Number of Rollouts */}
-                  <div className="space-y-2 mb-4">
-                    <label className="text-sm font-medium">
-                      Number of Rollouts (iterations)
-                    </label>
-                    <Input
-                      type="number"
-                      min="1"
-                      max="50"
-                      value={numRollouts}
-                      onChange={(e) => setNumRollouts(Number(e.target.value))}
-                    />
-                  </div>
-
-                  <Separator className="my-4" />
-
-                  {/* Sample Group */}
-                  <div className="space-y-2 mb-4">
-                    <label className="text-sm font-medium">Sample Group</label>
-                    <Select
-                      value={selectedGroupId}
-                      onValueChange={setSelectedGroupId}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select sample group" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {sampleGroups.map((group) => (
-                          <SelectItem key={group.id} value={group.id}>
-                            {group.name} ({group.samples.length} samples)
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <Separator className="my-4" />
-
-                  {/* Output Mode */}
-                  <div className="space-y-2 mb-4">
-                    <label className="text-sm font-medium">Output Mode</label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={optimizeStructuredOutput}
-                        onChange={(e) =>
-                          setOptimizeStructuredOutput(e.target.checked)
-                        }
-                        className="rounded"
-                      />
-                      <span className="text-sm">
-                        Structured Output (uses schema.json)
-                      </span>
-                    </label>
-                  </div>
-
-                  <Separator className="my-4" />
-
-                  {/* Metrics */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <label className="text-sm font-medium">Metrics</label>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setMetricPromptEditorOpen(true)}
-                        className="h-7 gap-1.5"
-                      >
-                        <Edit className="h-3.5 w-3.5" />
-                        Edit Prompts
-                      </Button>
-                    </div>
-                    <div className="space-y-2">
-                      {AVAILABLE_METRICS.map((metric) => (
-                        <div key={metric} className="flex items-start gap-2">
-                          <input
-                            type="checkbox"
-                            id={`metric-${metric}`}
-                            checked={selectedMetrics.includes(metric)}
-                            onChange={() => handleMetricToggle(metric)}
-                            className="rounded mt-0.5 cursor-pointer"
-                          />
-                          <label
-                            htmlFor={`metric-${metric}`}
-                            className="flex items-center gap-1.5 cursor-pointer flex-1"
-                          >
-                            <span className="text-sm font-medium">
-                              {METRIC_LABELS[metric]}
-                            </span>
-                            <HoverCard>
-                              <HoverCardTrigger asChild>
-                                <Info className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground transition-colors" />
-                              </HoverCardTrigger>
-                              <HoverCardContent className="w-80" side="right">
-                                <div className="space-y-2">
-                                  <h4 className="text-sm font-semibold">
-                                    {METRIC_LABELS[metric]}
-                                  </h4>
-                                  <p className="text-sm text-muted-foreground">
-                                    {METRIC_DESCRIPTIONS[metric]}
-                                  </p>
-                                </div>
-                              </HoverCardContent>
-                            </HoverCard>
-                          </label>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Right side: Optimize Button */}
-              <div className="w-64 space-y-4">
-                <div className="border rounded-lg p-6 bg-card sticky top-6">
-                  <h2 className="text-lg font-semibold mb-4">Actions</h2>
-                  {isOptimizing ? (
-                    <Button
-                      variant="destructive"
-                      className="w-full"
-                      onClick={handleStop}
-                    >
-                      <Square className="size-4 mr-2" />
-                      Stop
-                    </Button>
-                  ) : (
-                    <Button
-                      className="w-full"
-                      onClick={handleStartOptimization}
-                    >
-                      <Play className="size-4 mr-2" />
-                      Start Optimization
-                    </Button>
-                  )}
-                  {isOptimizing && (
-                    <div className="flex items-center gap-2 mt-4 text-blue-600">
-                      <Loader2 className="size-4 animate-spin" />
-                      <span className="text-sm font-medium">Running...</span>
-                    </div>
-                  )}
-                </div>
-              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  localStorage.removeItem("optimizationState");
+                  setCurrentRunId(null);
+                  setStreamLogs([]);
+                  setChartData([]);
+                  setIterations([]);
+                  setFinalPrompt("");
+                  toast.info("Previous run cleared");
+                }}
+              >
+                Clear Run
+              </Button>
             </div>
-          </TabsContent>
+          </div>
+        )}
 
-          {/* Progress Tab */}
-          <TabsContent value="progress" className="mt-0">
+        {/* Configuration Section */}
+        <div className="border rounded-lg p-6 bg-card space-y-6">
+          <h2 className="text-lg font-semibold">Configuration</h2>
+
+          {/* System Prompt (Read-only) */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium">
+                System Prompt (from current group)
+              </label>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setPromptEditorOpen(true)}
+                className="h-7 gap-1.5"
+              >
+                <Edit className="h-3.5 w-3.5" />
+                Edit
+              </Button>
+            </div>
+            <Textarea
+              value={systemPrompt}
+              readOnly
+              className="min-h-[100px] font-mono text-xs bg-muted cursor-pointer"
+              placeholder="Loading prompt..."
+              onClick={() => setPromptEditorOpen(true)}
+            />
+          </div>
+
+          <Separator />
+
+          {/* Models */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">
+                Optimization Model (Task Model)
+              </label>
+              <Select
+                value={optimizationModel}
+                onValueChange={setOptimizationModel}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select model" />
+                </SelectTrigger>
+                <SelectContent>
+                  {textModels.map((m) => (
+                    <SelectItem key={m.id} value={m.id}>
+                      {m.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">
+                Reflection Model (Improves Prompts)
+              </label>
+              <Select
+                value={reflectionModel}
+                onValueChange={setReflectionModel}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select model" />
+                </SelectTrigger>
+                <SelectContent>
+                  {textModels.map((m) => (
+                    <SelectItem key={m.id} value={m.id}>
+                      {m.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <Separator />
+
+          {/* Batch and Rollouts */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">
+                Batch Size (samples per iteration)
+              </label>
+              <Input
+                type="number"
+                min="1"
+                max="10"
+                value={batchSize}
+                onChange={(e) => setBatchSize(Number(e.target.value))}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">
+                Number of Rollouts (iterations)
+              </label>
+              <Input
+                type="number"
+                min="1"
+                max="50"
+                value={numRollouts}
+                onChange={(e) => setNumRollouts(Number(e.target.value))}
+              />
+            </div>
+          </div>
+
+          <Separator />
+
+          {/* Sample Group and Output Mode */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Sample Group</label>
+              <Select
+                value={selectedGroupId}
+                onValueChange={setSelectedGroupId}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select sample group" />
+                </SelectTrigger>
+                <SelectContent>
+                  {sampleGroups.map((group) => (
+                    <SelectItem key={group.id} value={group.id}>
+                      {group.name} ({group.samples.length} samples)
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Output Mode</label>
+              <label className="flex items-center gap-2 cursor-pointer mt-2">
+                <input
+                  type="checkbox"
+                  checked={optimizeStructuredOutput}
+                  onChange={(e) =>
+                    setOptimizeStructuredOutput(e.target.checked)
+                  }
+                  className="rounded"
+                />
+                <span className="text-sm">
+                  Structured Output (uses schema.json)
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <Separator />
+
+          {/* Metrics */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium">Metrics</label>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setMetricPromptEditorOpen(true)}
+                className="h-7 gap-1.5"
+              >
+                <Edit className="h-3.5 w-3.5" />
+                Edit Prompts
+              </Button>
+            </div>
+            <div className="space-y-2">
+              {AVAILABLE_METRICS.map((metric) => (
+                <div key={metric} className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    id={`metric-${metric}`}
+                    checked={selectedMetrics.includes(metric)}
+                    onChange={() => handleMetricToggle(metric)}
+                    className="rounded mt-0.5 cursor-pointer"
+                  />
+                  <label
+                    htmlFor={`metric-${metric}`}
+                    className="flex items-center gap-1.5 cursor-pointer flex-1"
+                  >
+                    <span className="text-sm font-medium">
+                      {METRIC_LABELS[metric]}
+                    </span>
+                    <HoverCard>
+                      <HoverCardTrigger asChild>
+                        <Info className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground transition-colors" />
+                      </HoverCardTrigger>
+                      <HoverCardContent className="w-80" side="right">
+                        <div className="space-y-2">
+                          <h4 className="text-sm font-semibold">
+                            {METRIC_LABELS[metric]}
+                          </h4>
+                          <p className="text-sm text-muted-foreground">
+                            {METRIC_DESCRIPTIONS[metric]}
+                          </p>
+                        </div>
+                      </HoverCardContent>
+                    </HoverCard>
+                  </label>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <Separator />
+
+          {/* Start/Stop Button - Centered and Prominent */}
+          <div className="flex justify-center pt-4">
+            {isOptimizing ? (
+              <Button
+                variant="destructive"
+                size="lg"
+                className="min-w-[200px]"
+                onClick={handleStop}
+              >
+                <Square className="size-5 mr-2" />
+                Stop Optimization
+              </Button>
+            ) : (
+              <Button
+                size="lg"
+                className="min-w-[200px]"
+                onClick={handleStartOptimization}
+              >
+                <Play className="size-5 mr-2" />
+                Start Optimization
+              </Button>
+            )}
+          </div>
+
+          {isOptimizing && (
+            <div className="flex items-center justify-center gap-2 text-blue-600">
+              <Loader2 className="size-5 animate-spin" />
+              <span className="text-sm font-medium">Optimization running...</span>
+            </div>
+          )}
+        </div>
+
+        {/* Progress Section - Shown when optimization is running or has logs */}
+        {(isOptimizing || currentRunId || streamLogs.length > 0) && (
+          <div className="space-y-6">
+            <h2 className="text-lg font-semibold">Optimization Progress</h2>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Left Half: Streaming Logs */}
               <div className="border rounded-lg p-6 bg-card">
                 <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-semibold">Live Stream</h2>
+                  <h3 className="text-base font-semibold">Live Stream</h3>
                   {currentRunId && !isOptimizing && (
                     <span className="text-xs text-amber-600 bg-amber-50 dark:bg-amber-900/20 px-2 py-1 rounded">
                       Viewing current run
                     </span>
                   )}
                 </div>
-                <div className="h-[calc(100vh-280px)] overflow-y-auto space-y-4 font-mono text-xs">
-                  {streamLogs.length === 0 &&
-                    !isOptimizing &&
-                    !currentRunId && (
-                      <p className="text-sm text-muted-foreground">
-                        Start optimization to see live logs...
-                      </p>
-                    )}
+                <div className="h-[500px] overflow-y-auto space-y-4 font-mono text-xs">
+                  {streamLogs.length === 0 && !isOptimizing && !currentRunId && (
+                    <p className="text-sm text-muted-foreground">
+                      Start optimization to see live logs...
+                    </p>
+                  )}
 
                   {streamLogs.length === 0 && !isOptimizing && currentRunId && (
                     <p className="text-sm text-muted-foreground">
-                      No logs available for this run. It may have been
-                      interrupted.
+                      No logs available for this run. It may have been interrupted.
                     </p>
                   )}
 
@@ -1097,13 +1238,13 @@ export default function OptimizePage() {
 
               {/* Right Half: Chart */}
               <div className="border rounded-lg p-6 bg-card">
-                <h2 className="text-lg font-semibold mb-4">Score Over Time</h2>
+                <h3 className="text-base font-semibold mb-4">Score Over Time</h3>
                 {chartData.length > 0 ? (
-                  <div className="h-[calc(100vh-280px)]">
+                  <div className="h-[500px]">
                     <OptimizeLiveChart data={chartData} />
                   </div>
                 ) : (
-                  <div className="h-[calc(100vh-280px)] flex items-center justify-center">
+                  <div className="h-[500px] flex items-center justify-center">
                     <p className="text-sm text-muted-foreground">
                       Chart will appear as optimization progresses...
                     </p>
@@ -1111,9 +1252,235 @@ export default function OptimizePage() {
                 )}
               </div>
             </div>
-          </TabsContent>
-        </Tabs>
+          </div>
+        )}
+
+        {/* Runs History Section - Always visible, filtered by current group */}
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">
+              Runs History {currentGroupId && `(${getSampleGroupName(currentGroupId)})`}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {filteredRuns.length} run{filteredRuns.length !== 1 ? "s" : ""} in this group
+            </p>
+          </div>
+
+          {filteredRuns.length === 0 ? (
+            <div className="border rounded-lg p-12 bg-card text-center">
+              <Database className="size-16 mx-auto mb-4 opacity-20" />
+              <p className="text-muted-foreground">No optimization runs yet</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Run an optimization to see results here
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {filteredRuns.map((run) => (
+                <div key={run.id} className="border rounded-lg bg-card overflow-hidden">
+                  {/* Run Header - Clickable to expand */}
+                  <button
+                    onClick={() =>
+                      setExpandedRunId(expandedRunId === run.id ? null : run.id)
+                    }
+                    className="w-full p-4 hover:bg-muted/50 transition-colors"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        {expandedRunId === run.id ? (
+                          <ChevronDown className="size-4 text-muted-foreground" />
+                        ) : (
+                          <ChevronRight className="size-4 text-muted-foreground" />
+                        )}
+                        {getStatusBadge(run.status)}
+                        <div className="flex items-center gap-2 text-sm">
+                          <Clock className="size-3" />
+                          <span className="text-muted-foreground">
+                            {formatDate(run.timestamp)}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 text-sm">
+                          <Target className="size-3" />
+                          <span className="font-medium">
+                            Score: {run.bestScore.toFixed(3)}
+                          </span>
+                        </div>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteRun(run.id);
+                        }}
+                        className="hover:text-destructive"
+                      >
+                        <Trash2 className="size-4" />
+                      </Button>
+                    </div>
+                  </button>
+
+                  {/* Expanded Run Details */}
+                  {expandedRunId === run.id && (
+                    <div className="p-6 pt-0 space-y-6">
+                      <Separator />
+
+                      {/* Configuration */}
+                      <div>
+                        <h4 className="text-sm font-semibold mb-3">Configuration</h4>
+                        <div className="grid grid-cols-2 gap-4 text-sm">
+                          <div>
+                            <span className="text-muted-foreground">
+                              Optimization Model:
+                            </span>
+                            <div className="font-mono text-xs mt-1">
+                              {run.config.optimizationModel}
+                            </div>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">
+                              Reflection Model:
+                            </span>
+                            <div className="font-mono text-xs mt-1">
+                              {run.config.reflectionModel}
+                            </div>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Batch Size:</span>
+                            <div className="font-medium">{run.config.batchSize}</div>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Iterations:</span>
+                            <div className="font-medium">
+                              {run.config.numRollouts}
+                            </div>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Collection Size:</span>
+                            <div className="font-medium">{run.collectionSize}</div>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Samples Used:</span>
+                            <div className="font-medium">
+                              {run.samplesUsed.length}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="mt-3">
+                          <span className="text-sm text-muted-foreground">Metrics:</span>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {run.config.selectedMetrics.map((metric) => (
+                              <span
+                                key={metric}
+                                className="px-2 py-1 rounded bg-muted text-xs"
+                              >
+                                {metric}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Final Prompt */}
+                      <div>
+                        <h4 className="text-sm font-semibold mb-3">Final Prompt</h4>
+                        <Textarea
+                          value={run.finalPrompt}
+                          readOnly
+                          className="min-h-[150px] font-mono text-xs bg-muted"
+                        />
+                        <Button
+                          className="mt-3"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            navigator.clipboard.writeText(run.finalPrompt);
+                            toast.success("Copied to clipboard!");
+                          }}
+                        >
+                          Copy to Clipboard
+                        </Button>
+                      </div>
+
+                      {/* All Prompts */}
+                      <div>
+                        <h4 className="text-sm font-semibold mb-4">
+                          All Prompts ({run.prompts.length})
+                        </h4>
+                        <div className="space-y-4 max-h-[600px] overflow-y-auto">
+                          {run.prompts.map((promptEntry, index) => (
+                            <div
+                              key={index}
+                              className={`p-4 rounded-lg border-2 ${
+                                promptEntry.accepted
+                                  ? "border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/10"
+                                  : "border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/10"
+                              }`}
+                            >
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-semibold text-sm">
+                                    Iteration {promptEntry.iteration}
+                                  </span>
+                                  {promptEntry.accepted ? (
+                                    <CheckCircle className="size-4 text-green-600" />
+                                  ) : (
+                                    <XCircle className="size-4 text-red-600" />
+                                  )}
+                                  <span
+                                    className={`text-xs ${
+                                      promptEntry.accepted
+                                        ? "text-green-600"
+                                        : "text-red-600"
+                                    }`}
+                                  >
+                                    {promptEntry.accepted ? "Accepted" : "Rejected"}
+                                  </span>
+                                </div>
+                                <span className="text-sm font-medium">
+                                  Score: {promptEntry.score.toFixed(3)}
+                                </span>
+                              </div>
+
+                              {/* Metrics */}
+                              <div className="flex flex-wrap gap-2 mb-3">
+                                {Object.entries(promptEntry.metrics).map(
+                                  ([key, value]) =>
+                                    value !== undefined && (
+                                      <span
+                                        key={key}
+                                        className="px-2 py-1 rounded bg-muted text-xs"
+                                      >
+                                        {key}: {value.toFixed(2)}
+                                      </span>
+                                    )
+                                )}
+                              </div>
+
+                              <Textarea
+                                value={promptEntry.prompt}
+                                readOnly
+                                className="min-h-[100px] font-mono text-xs bg-background"
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* Samples Dialog */}
+      <SamplesDialog
+        open={samplesDialogOpen}
+        onOpenChange={setSamplesDialogOpen}
+      />
 
       {/* Prompt Editor Dialog */}
       <PromptEditorDialog

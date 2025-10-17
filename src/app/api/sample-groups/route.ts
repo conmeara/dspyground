@@ -3,6 +3,53 @@ import { promises as fs } from "fs";
 import { nanoid } from "nanoid";
 import * as path from "path";
 
+// Migration: Read prompt.md and move content to default group
+async function migratePromptToGroups(data: SamplesData): Promise<boolean> {
+  let migrated = false;
+
+  // Check if any group already has a prompt (migration already done)
+  const hasPrompts = data.groups.some((g) => g.prompt !== undefined);
+  if (hasPrompts) {
+    return false; // Already migrated
+  }
+
+  // Try to read existing prompt.md
+  const promptPath = path.join(getDataDirectory(), "prompt.md");
+  try {
+    const promptContent = await fs.readFile(promptPath, "utf-8");
+
+    // Assign to default group
+    const defaultGroup = data.groups.find((g) => g.id === "default");
+    if (defaultGroup) {
+      defaultGroup.prompt = promptContent;
+      defaultGroup.chatHistory = []; // Initialize empty chat history
+      migrated = true;
+
+      // Backup original prompt.md
+      const backupPath = path.join(getDataDirectory(), "prompt.md.backup");
+      await fs.writeFile(backupPath, promptContent, "utf-8");
+
+      console.log("[Migration] Moved prompt.md to default group, created backup");
+    }
+
+    // Initialize prompt and chatHistory for all other groups
+    data.groups.forEach((group) => {
+      if (group.id !== "default") {
+        group.prompt = group.prompt || "";
+        group.chatHistory = group.chatHistory || [];
+      }
+    });
+  } catch (error) {
+    // No prompt.md exists, initialize all groups with empty prompts
+    data.groups.forEach((group) => {
+      group.prompt = group.prompt || "";
+      group.chatHistory = group.chatHistory || [];
+    });
+  }
+
+  return migrated;
+}
+
 function getSamplesFile() {
   return path.join(getDataDirectory(), "samples.json");
 }
@@ -12,6 +59,8 @@ export interface SampleGroup {
   name: string;
   timestamp: string;
   samples: any[];
+  prompt?: string; // Per-group system prompt
+  chatHistory?: any[]; // Per-group chat messages
 }
 
 export interface SamplesData {
@@ -23,8 +72,18 @@ async function loadSamplesData(): Promise<SamplesData> {
   try {
     const samplesFile = getSamplesFile();
     const data = await fs.readFile(samplesFile, "utf-8");
-    return JSON.parse(data);
+    const samplesData = JSON.parse(data);
+
+    // Run migration if needed
+    const migrated = await migratePromptToGroups(samplesData);
+    if (migrated) {
+      // Save migrated data
+      await saveSamplesData(samplesData);
+    }
+
+    return samplesData;
   } catch {
+    // Create default group with empty prompt and chat history
     return {
       groups: [
         {
@@ -32,6 +91,8 @@ async function loadSamplesData(): Promise<SamplesData> {
           name: "Default Group",
           timestamp: new Date().toISOString(),
           samples: [],
+          prompt: "",
+          chatHistory: [],
         },
       ],
       currentGroupId: "default",
@@ -95,6 +156,8 @@ export async function POST(request: Request) {
       name,
       timestamp: new Date().toISOString(),
       samples: [],
+      prompt: "", // Initialize with empty prompt
+      chatHistory: [], // Initialize with empty chat history
     };
 
     data.groups.push(newGroup);

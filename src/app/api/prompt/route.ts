@@ -4,32 +4,57 @@ import path from "path";
 
 export const runtime = "nodejs";
 
-function getPromptPath() {
-  return path.join(getDataDirectory(), "prompt.md");
+interface SampleGroup {
+  id: string;
+  name: string;
+  timestamp: string;
+  samples: any[];
+  prompt?: string;
+  chatHistory?: any[];
 }
 
-async function ensureFile(): Promise<void> {
-  const filePath = getPromptPath();
-  const dir = path.dirname(filePath);
-  try {
-    await fs.mkdir(dir, { recursive: true });
-  } catch {}
-  try {
-    await fs.access(filePath);
-  } catch {
-    // Create empty prompt file if it doesn't exist
-    await fs.writeFile(filePath, "", "utf-8");
-  }
+interface SamplesData {
+  groups: SampleGroup[];
+  currentGroupId: string;
+}
+
+function getSamplesFile() {
+  return path.join(getDataDirectory(), "samples.json");
+}
+
+async function loadSamplesData(): Promise<SamplesData> {
+  const samplesFile = getSamplesFile();
+  const data = await fs.readFile(samplesFile, "utf-8");
+  return JSON.parse(data);
+}
+
+async function saveSamplesData(data: SamplesData): Promise<void> {
+  const samplesFile = getSamplesFile();
+  await fs.writeFile(samplesFile, JSON.stringify(data, null, 2));
 }
 
 export async function GET() {
   try {
-    await ensureFile();
-    const content = await fs.readFile(getPromptPath(), "utf-8");
-    return new Response(JSON.stringify({ prompt: content }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    const data = await loadSamplesData();
+    const currentGroup = data.groups.find((g) => g.id === data.currentGroupId);
+
+    if (!currentGroup) {
+      return new Response(
+        JSON.stringify({ error: "Current group not found" }),
+        {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({ prompt: currentGroup.prompt || "" }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
   } catch (error) {
     console.error("Error reading prompt:", error);
     return new Response(JSON.stringify({ error: "Failed to load prompt" }), {
@@ -48,8 +73,22 @@ export async function POST(req: Request) {
       throw new Error("Invalid prompt: must be a string");
     }
 
-    await ensureFile();
-    await fs.writeFile(getPromptPath(), prompt, "utf-8");
+    const data = await loadSamplesData();
+    const currentGroup = data.groups.find((g) => g.id === data.currentGroupId);
+
+    if (!currentGroup) {
+      return new Response(
+        JSON.stringify({ error: "Current group not found" }),
+        {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    // Update the current group's prompt
+    currentGroup.prompt = prompt;
+    await saveSamplesData(data);
 
     return new Response(JSON.stringify({ success: true, prompt }), {
       status: 200,

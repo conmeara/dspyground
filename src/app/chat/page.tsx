@@ -39,6 +39,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { FeedbackDialog } from "@/components/ui/feedback-dialog";
+import { SamplesDialog } from "@/components/ui/samples-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -97,10 +98,7 @@ export default function Chat() {
   const [savingSample, setSavingSample] = useState(false);
   const [currentPrompt, setCurrentPrompt] = useState<string>("");
   const [feedbackDialogOpen, setFeedbackDialogOpen] = useState(false);
-  const [sampleGroups, setSampleGroups] = useState<any[]>([]);
-  const [currentGroupId, setCurrentGroupId] = useState<string>("");
-  const [newGroupDialogOpen, setNewGroupDialogOpen] = useState(false);
-  const [newGroupName, setNewGroupName] = useState("");
+  const [samplesDialogOpen, setSamplesDialogOpen] = useState(false);
   const [schemaEditorOpen, setSchemaEditorOpen] = useState(false);
   const [schemaContent, setSchemaContent] = useState<string>("");
   const [promptEditorContent, setPromptEditorContent] = useState<string>("");
@@ -382,9 +380,23 @@ export default function Chat() {
       : "ready"
     : status;
 
-  // Load sample groups
+  // Load current group ID and schema on mount
+  const [currentGroupId, setCurrentGroupId] = useState<string>("");
+
   useEffect(() => {
-    loadSampleGroups();
+    const loadCurrentGroup = async () => {
+      try {
+        const response = await fetch("/api/sample-groups");
+        if (response.ok) {
+          const data = await response.json();
+          setCurrentGroupId(data.currentGroupId || "");
+        }
+      } catch (error) {
+        console.error("Failed to load current group:", error);
+      }
+    };
+
+    loadCurrentGroup();
     loadSchema();
   }, []);
 
@@ -457,19 +469,6 @@ export default function Chat() {
     handleClear,
   ]);
 
-  const loadSampleGroups = async () => {
-    try {
-      const response = await fetch("/api/sample-groups");
-      if (response.ok) {
-        const data = await response.json();
-        setSampleGroups(data.groups || []);
-        setCurrentGroupId(data.currentGroupId || "");
-      }
-    } catch (error) {
-      console.error("Failed to load sample groups:", error);
-    }
-  };
-
   const loadSchema = async () => {
     try {
       const response = await fetch("/api/schema");
@@ -503,63 +502,6 @@ export default function Chat() {
       } else {
         toast.error("Failed to save schema");
       }
-    }
-  };
-
-  const handleCreateNewGroup = async () => {
-    if (!newGroupName.trim()) {
-      toast.error("Please enter a group name");
-      return;
-    }
-
-    try {
-      const response = await fetch("/api/sample-groups", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newGroupName.trim() }),
-      });
-
-      if (response.ok) {
-        toast.success("New sample group created");
-        await loadSampleGroups();
-        setNewGroupDialogOpen(false);
-        setNewGroupName("");
-        // Clear chat for new group
-        handleClear();
-      } else {
-        toast.error("Failed to create sample group");
-      }
-    } catch (error) {
-      console.error("Failed to create sample group:", error);
-      toast.error("Failed to create sample group");
-    }
-  };
-
-  const handleGroupChange = async (groupId: string) => {
-    // Handle the special "new-group" option
-    if (groupId === "new-group") {
-      setNewGroupDialogOpen(true);
-      return;
-    }
-
-    try {
-      const response = await fetch("/api/sample-groups", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ currentGroupId: groupId }),
-      });
-
-      if (response.ok) {
-        setCurrentGroupId(groupId);
-        // Clear chat state when switching groups to maintain session isolation
-        handleClear();
-        toast.success("Sample group changed");
-      } else {
-        toast.error("Failed to change sample group");
-      }
-    } catch (error) {
-      console.error("Failed to change sample group:", error);
-      toast.error("Failed to change sample group");
     }
   };
 
@@ -705,15 +647,13 @@ export default function Chat() {
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <h1 className="text-xl font-medium">Agent Chat</h1>
+              <h1 className="text-xl font-medium">Chat</h1>
               <ThemeToggle />
             </div>
             <div className="flex items-center gap-3">
-              <Button variant="outline" size="sm" asChild>
-                <Link href="/how-to">
-                  <BookOpen className="size-4 mr-2" />
-                  How To
-                </Link>
+              <Button variant="outline" size="sm" onClick={() => setSamplesDialogOpen(true)}>
+                <Database className="size-4 mr-2" />
+                Samples
               </Button>
               <div className="flex items-center gap-2 px-3 py-1.5 border rounded-md bg-background">
                 <span className="text-xs text-muted-foreground">Teaching</span>
@@ -736,26 +676,13 @@ export default function Chat() {
                   Structured
                 </span>
               </div>
-              <Select value={currentGroupId} onValueChange={handleGroupChange}>
-                <SelectTrigger className="w-[180px] h-8 text-xs">
-                  <SelectValue placeholder="Select group" />
-                </SelectTrigger>
-                <SelectContent>
-                  {sampleGroups.map((group) => (
-                    <SelectItem key={group.id} value={group.id}>
-                      {group.name} ({group.samples.length})
-                    </SelectItem>
-                  ))}
-                  <SelectItem value="new-group" className="text-blue-600">
-                    <div className="flex items-center gap-1.5">
-                      <Plus className="size-3" />
-                      <span>New Group</span>
-                    </div>
-                  </SelectItem>
-                </SelectContent>
-              </Select>
               <Button variant="ghost" size="sm" onClick={handleClear}>
                 Clear
+              </Button>
+              <Button size="sm" asChild>
+                <Link href="/optimize">
+                  Optimize →
+                </Link>
               </Button>
             </div>
           </div>
@@ -1080,46 +1007,11 @@ export default function Chat() {
         isSaving={savingSample}
       />
 
-      {/* New Group Dialog */}
-      <Dialog open={newGroupDialogOpen} onOpenChange={setNewGroupDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Create New Sample Group</DialogTitle>
-            <DialogDescription>
-              Enter a name for your new sample group. This will help you
-              organize different sets of test samples.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="group-name">Group Name</Label>
-              <Input
-                id="group-name"
-                placeholder="e.g., Tone Tests, Safety Tests..."
-                value={newGroupName}
-                onChange={(e) => setNewGroupName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    handleCreateNewGroup();
-                  }
-                }}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setNewGroupDialogOpen(false);
-                setNewGroupName("");
-              }}
-            >
-              Cancel
-            </Button>
-            <Button onClick={handleCreateNewGroup}>Create Group</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Samples Dialog */}
+      <SamplesDialog
+        open={samplesDialogOpen}
+        onOpenChange={setSamplesDialogOpen}
+      />
 
       {/* Schema Editor Dialog */}
       <Dialog open={schemaEditorOpen} onOpenChange={setSchemaEditorOpen}>
